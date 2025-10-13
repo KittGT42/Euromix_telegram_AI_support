@@ -16,6 +16,8 @@ class TelegramUser(SQLModel, table=True):
     )
     telegram_user_name: str = Field(max_length=255)
     telegram_user_phone: str = Field(max_length=255)
+    department: Optional[str] = Field(default=None, max_length=255)
+    balance_unit: Optional[str] = Field(default=None, max_length=255)
 
     # Зв'язок з повідомленнями (один користувач - багато повідомлень)
     messages: List["ChatHistory"] = Relationship(
@@ -66,6 +68,8 @@ class JiraIssueStatus(SQLModel, table=True):
     )
 
     category_status_issue: str = Field(max_length=255, default='To Do')
+    service_app_name: str = Field(max_length=255, default='')
+    group_support_name: str = Field(max_length=255, default='ТехПідтримка')
     timestamp: datetime = Field(default_factory=datetime.now)
 
     user: Optional[TelegramUser] = Relationship(back_populates="jira_issues")

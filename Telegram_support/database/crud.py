@@ -102,6 +102,74 @@ def update_user_jira_issue_key(telegram_id: int, jira_issue_key: str) -> bool:
         logger.error(f"❌ Error updating jira issue key: {e}")
         return False
 
+
+def update_user_department(telegram_id: int, department: str) -> bool:
+    """
+    Оновлює департамент для користувача.
+
+    Args:
+        telegram_id: telegram_user_id користувача
+        department: назва департаменту
+
+    Returns:
+        bool: True якщо оновлення успішне, False якщо помилка
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(TelegramUser).where(
+                TelegramUser.telegram_user_id == telegram_id
+            )
+            user = session.exec(statement).first()
+
+            if not user:
+                logger.warning(f"User {telegram_id} not found")
+                return False
+
+            user.department = department
+            session.add(user)
+            session.commit()
+
+            logger.info(f"✅ Department updated for user {telegram_id}: {department}")
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Error updating department: {e}")
+        return False
+
+
+def update_user_balance_unit(telegram_id: int, balance_unit: str) -> bool:
+    """
+    Оновлює баланс-юніт для користувача.
+
+    Args:
+        telegram_id: telegram_user_id користувача
+        balance_unit: назва баланс-юніту
+
+    Returns:
+        bool: True якщо оновлення успішне, False якщо помилка
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(TelegramUser).where(
+                TelegramUser.telegram_user_id == telegram_id
+            )
+            user = session.exec(statement).first()
+
+            if not user:
+                logger.warning(f"User {telegram_id} not found")
+                return False
+
+            user.balance_unit = balance_unit
+            session.add(user)
+            session.commit()
+
+            logger.info(f"✅ Balance unit updated for user {telegram_id}: {balance_unit}")
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Error updating balance unit: {e}")
+        return False
+
 # ============= ІСТОРІЯ ЧАТУ =============
 
 def save_message(user_id: int, role: str, message: str) -> bool:
@@ -206,23 +274,14 @@ def get_chat_history_count(user_id: int) -> int:
 
 
 # ============= ДЖИРА ТОКЕН =============
-def save_jira_issue(telegram_user_id: int, issue_key: str) -> bool:
-    """
-    ✅ ЗМІНЕНО: тепер приймає telegram_user_id + issue_key
-    Зберігає Jira issue з прив'язкою до користувача
-
-    Args:
-        telegram_user_id: ID користувача в Telegram
-        issue_key: Ключ Jira issue (наприклад 'TP-17')
-
-    Returns:
-        bool: True якщо успішно, False якщо помилка
-    """
+def save_jira_issue(telegram_user_id: int, issue_key: str, service_app_name: str, group_support_name: str = 'ТехПідтримка') -> bool:
     try:
         with Session(engine) as session:
             jira_issue = JiraIssueStatus(
-                telegram_user_id=telegram_user_id,  # ✅ ДОДАНО
+                telegram_user_id=telegram_user_id,
                 issue_key=issue_key,
+                service_app_name=service_app_name,
+                group_support_name = group_support_name
             )
             session.add(jira_issue)
             session.commit()

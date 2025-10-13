@@ -16,7 +16,9 @@ from Telegram_support.database.crud import (
     clear_chat_history,
     get_chat_history_count,
     get_issue_status_by_issue_key,
-    get_active_issue_for_user
+    get_active_issue_for_user,
+    update_user_department,
+    update_user_balance_unit
 )
 
 from Telegram_support.utils.jira import create_issue, add_comment_to_issue
@@ -33,7 +35,7 @@ load_dotenv()
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE, DEPARTAMENT_CHOOSE, BALANCE_UNIT, SERVICE  = range(7)
+START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE, DEPARTAMENT_CHOOSE, BALANCE_UNIT, SERVICE, GROUP  = range(8)
 
 
 def ask_to_open_web_ui_agent(messages_array):
@@ -83,7 +85,12 @@ class SupportAiAgent:
                     MessageHandler(filters.CONTACT, self.phone_received),
                     MessageHandler(filters.TEXT, self.confirm_phone)
                 ],
-                DEPARTAMENT_CHOOSE: [filters.TEXT],
+                DEPARTAMENT_CHOOSE: [
+                    MessageHandler(filters.TEXT, self.departament_choose)
+                ],
+                BALANCE_UNIT: [
+                    MessageHandler(filters.TEXT, self.balance_unit_choose)
+                ],
             },
             fallbacks=[CommandHandler('cancel', self.cancel)]
         )
@@ -91,8 +98,8 @@ class SupportAiAgent:
         # Початок спілкування
         start_chat = ConversationHandler(
             entry_points=[
-                CommandHandler('start_chat', self.send_message),
-                MessageHandler(filters.Regex("^Почати діалог$"), self.send_message)
+                CommandHandler('start_chat', self.service_app_name),
+                MessageHandler(filters.Regex("^Почати діалог$"), self.service_app_name)
             ],
             states={
                 TAKE_SUMMARY: [
@@ -162,54 +169,236 @@ class SupportAiAgent:
             await update.message.reply_text('Натисніть кнопку нижче Поділитися контактом')
             return PHONE
 
+        # Список департаментів
+        DEPARTAMENTS = [
+            "Комерційний департамент",
+            "Операційний департамент",
+            "Бухгалтерія",
+            "Відділ кадрів",
+            "Департамент маркетинга",
+            "ІТ департамент",
+            "Департамент безпеки",
+            "Фінансовий департамент",
+            "Департамент персоналу",
+            "Контрольно ревізійний відділ",
+            "Юр. департамент"
+        ]
+
+        # Створюємо клавіатуру з департаментами (по 2 кнопки в ряд)
+        keyboard = []
+        for i in range(0, len(DEPARTAMENTS), 2):
+            row = DEPARTAMENTS[i:i+2]
+            keyboard.append(row)
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+        await update.message.reply_text(
+            f"✅ Авторизація успішна!\nВаш номер: {phone_user}\n\n"
+            f"Оберіть ваш департамент:",
+            reply_markup=reply_markup
+        )
+
+        return DEPARTAMENT_CHOOSE
+
+    async def departament_choose(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробка вибору департаменту"""
+        user_id = update.effective_user.id
+        selected_department = update.message.text
+
+        DEPARTAMENTS = [
+            "Комерційний департамент",
+            "Операційний департамент",
+            "Бухгалтерія",
+            "Відділ кадрів",
+            "Департамент маркетинга",
+            "ІТ департамент",
+            "Департамент безпеки",
+            "Фінансовий департамент",
+            "Департамент персоналу",
+            "Контрольно ревізійний відділ",
+            "Юр. департамент"
+        ]
+
+        # Перевіряємо чи вибраний департамент валідний
+        if selected_department not in DEPARTAMENTS:
+            # Якщо невалідний вибір, показуємо клавіатуру знову
+            keyboard = []
+            for i in range(0, len(DEPARTAMENTS), 2):
+                row = DEPARTAMENTS[i:i+2]
+                keyboard.append(row)
+
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+            await update.message.reply_text(
+                "❌ Будь ласка, оберіть департамент зі списку:",
+                reply_markup=reply_markup
+            )
+            return DEPARTAMENT_CHOOSE
+
+        # Зберігаємо обраний департамент
+        update_user_department(user_id, selected_department)
+
+        # Список баланс-юнітів
+        BALANCE_UNITS = [
+            "Вінниця",
+            "PSC",
+            "Полтава",
+            "Київ",
+            "Суми",
+            "Харків",
+            "Запоріжжя",
+            "Кривий Ріг",
+            "Офіс",
+            "Одеса",
+            "Біла Церква",
+            "Львів",
+            "Дніпро",
+            "Черкаси",
+            "Краматорськ",
+            "Кропивницький",
+            "Чернігів"
+        ]
+
+        # Створюємо клавіатуру з баланс-юнітами (по 2 кнопки в ряд)
+        keyboard = []
+        for i in range(0, len(BALANCE_UNITS), 2):
+            row = BALANCE_UNITS[i:i+2]
+            keyboard.append(row)
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+        # Переходимо до вибору баланс-юніту
+        await update.message.reply_text(
+            f"✅ Департамент обрано: {selected_department}\n\n"
+            "Тепер оберіть ваш підрозділ",
+            reply_markup=reply_markup
+        )
+
+        return BALANCE_UNIT
+
+    async def balance_unit_choose(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробка вибору баланс-юніту"""
+        user_id = update.effective_user.id
+        selected_balance_unit = update.message.text
+
+        BALANCE_UNITS = [
+            "Вінниця",
+            "PSC",
+            "Полтава",
+            "Київ",
+            "Суми",
+            "Харків",
+            "Запоріжжя",
+            "Кривий Ріг",
+            "Офіс",
+            "Одеса",
+            "Біла Церква",
+            "Львів",
+            "Дніпро",
+            "Черкаси",
+            "Краматорськ",
+            "Кропивницький",
+            "Чернігів"
+        ]
+
+        # Перевіряємо чи вибраний баланс-юніт валідний
+        if selected_balance_unit not in BALANCE_UNITS:
+            # Якщо невалідний вибір, показуємо клавіатуру знову
+            keyboard = []
+            for i in range(0, len(BALANCE_UNITS), 2):
+                row = BALANCE_UNITS[i:i+2]
+                keyboard.append(row)
+
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+            await update.message.reply_text(
+                "❌ Будь ласка, оберіть баланс-юніт зі списку:",
+                reply_markup=reply_markup
+            )
+            return BALANCE_UNIT
+
+        # Зберігаємо обраний баланс-юніт
+        update_user_balance_unit(user_id, selected_balance_unit)
+
+        # Завершуємо реєстрацію
         keyboard = ReplyKeyboardMarkup([
             ["Почати діалог"],
         ], resize_keyboard=True, one_time_keyboard=True)
 
         await update.message.reply_text(
-            f"✅ Авторизація успішна!\nВаш номер: {phone_user}\n\n",
+            f"✅ Реєстрація завершена!\n"
+            f"Баланс-юніт: {selected_balance_unit}\n\n"
+            "Тепер ви можете почати діалог з підтримкою.",
             reply_markup=keyboard
         )
 
         return ConversationHandler.END
 
+    async def service_app_name(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Список баланс-юнітів
+        app_names = [
+            "E-mix 3.x"
+        ]
+
+        # Створюємо клавіатуру з баланс-юнітами (по 2 кнопки в ряд)
+        keyboard = []
+        for i in range(0, len(app_names), 2):
+            row = app_names[i:i + 2]
+            keyboard.append(row)
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+        await update.message.reply_text(
+            "Виберіть додаток з яким зявилось запитання",
+            reply_markup=reply_markup
+        )
+
+        return TAKE_SUMMARY
+
     async def create_summary_jira_issue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        app_names = [
+            "E-mix 3.x"
+        ]
+
         user_message = update.message.text
-        telegram_user_id_from_chat = update.effective_user.id
-        user = get_user_by_telegram_id(telegram_user_id_from_chat)
-        telegram_user_name_from_chat = update.effective_user.full_name
-        telegram_user_phone_from_chat = user[3]
-        telegram_user_link_from_chat = update.effective_user.link
 
-        returned_issue_key =  create_issue(summary_from_user=user_message, description='', telegram_user_id=telegram_user_id_from_chat,
-                     telegram_user_number=telegram_user_phone_from_chat, telegram_user_full_name=telegram_user_name_from_chat,
-                     telegram_user_link=telegram_user_link_from_chat)
+        if user_message in app_names:
 
-        save_message(telegram_user_id_from_chat, "user", user_message)
-        add_comment_to_issue(message=user_message, issue_key=returned_issue_key)
+            telegram_user_id_from_chat = update.effective_user.id
+            user = get_user_by_telegram_id(telegram_user_id_from_chat)
+            telegram_user_name_from_chat = update.effective_user.full_name
+            telegram_user_phone_from_chat = user[3]
+            telegram_user_link_from_chat = update.effective_user.link
 
-        # 3️⃣ Відправляємо всю історію в OpenWebUI API
-        ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": user_message}])
+            returned_issue_key =  create_issue(summary_from_user=user_message, description='', telegram_user_id=telegram_user_id_from_chat,
+                         telegram_user_number=telegram_user_phone_from_chat, telegram_user_full_name=telegram_user_name_from_chat,
+                         telegram_user_link=telegram_user_link_from_chat, service_app_name=user_message)
 
-        # 4️⃣ Зберігаємо відповідь асистента
-        save_message(telegram_user_id_from_chat, "assistant", ai_answer)
-        add_comment_to_issue(message=ai_answer, issue_key=returned_issue_key)
+            # 5️⃣ Відправляємо відповідь користувачу
+            await update.message.reply_text(text='Напишіть ваше запитання з яким вам допомогти у вирішенні')
+            return START_CHAT
 
-        # 5️⃣ Відправляємо відповідь користувачу
-        await update.message.reply_text(ai_answer)
-        return START_CHAT
+        else:
+            # Створюємо клавіатуру (по 2 кнопки в ряд)
+            keyboard = []
+            for i in range(0, len(app_names), 2):
+                row = app_names[i:i + 2]
+                keyboard.append(row)
+
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+            await update.message.reply_text(
+                "Виберіть додаток з яким зявилось запитання",
+                reply_markup=reply_markup
+            )
+            return TAKE_SUMMARY
 
     async def send_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+
         """Обробка повідомлень від користувача"""
         message_from_user = update.message.text
         user_id = update.effective_user.id
         user_data = get_user_by_telegram_id(user_id)
-
-        if message_from_user == 'Почати діалог' or message_from_user == '/start_chat':
-            await update.message.reply_text(
-                "Напишіть ваше запитання і ми вам надамо відповідь"
-            )
-            return TAKE_SUMMARY
 
         # Отримуємо активний issue користувача
         active_issue_key = get_active_issue_for_user(user_id)
