@@ -32,6 +32,18 @@ def webhook_issue_status():
 
     return "OK"
 
+
+
+
+@app.route('/article_to_barcode', methods=['POST'])
+def article_to_barcode():
+    # Отримуємо дані
+    data = request.json
+
+
+
+    return {'barcode': 'Штрихкод  00332255668899'}
+
 @app.route('/webhook_file', methods=['POST'])
 def webhook_file():
     # Отримуємо дані

@@ -11,7 +11,7 @@ from Telegram_support.database.crud import save_jira_issue
 load_dotenv()
 
 def create_issue(summary_from_user: str, description: str, telegram_user_id, telegram_user_number,
-                 telegram_user_full_name, service_app_name: str, telegram_user_link: str = None, project_key: str = "TP"):
+                 telegram_user_full_name, service_app_name: str = 'E-mix 3.x', telegram_user_link: str = None, project_key: str = "TP"):
 
     url = "https://zabutniy15.atlassian.net/rest/api/3/issue"
 
