@@ -10,12 +10,16 @@ from Telegram_support.database.crud import save_jira_issue
 
 load_dotenv()
 
-def create_issue(summary_from_user: str, description: str, telegram_user_id, telegram_user_number,
-                 telegram_user_full_name, service_app_name: str = 'E-mix 3.x', telegram_user_link: str = None, project_key: str = "TP"):
+def create_issue(summary_from_user: str, description: str, telegram_user_id, departament_id: str, balance_unit_id: str,
+                 telegram_user_name: str, user_fio: str, user_login: str,
+                 service_app_name: str = 'E-mix 3.x',project_key: str = "SD",
+                 group: str = '10036', issue_type: str = '10139', reporter_id: str = '712020:253569d1-370f-4872-823a-1467b196c19b',
+                 service_name_id: str = '10227'):
 
-    url = "https://zabutniy15.atlassian.net/rest/api/3/issue"
+    url = "https://euromix.atlassian.net/rest/api/3/issue"
 
-    auth = HTTPBasicAuth("zabutniy15@gmail.com", os.getenv("JIRA_API_TOKEN"))
+    auth = HTTPBasicAuth("Dmitriy.Kostromskiy@euromix.in.ua", os.getenv("JIRA_API_TOKEN"))
+    # auth = HTTPBasicAuth("tgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_USER"))
 
     headers = {
       "Accept": "application/json",
@@ -28,16 +32,17 @@ def create_issue(summary_from_user: str, description: str, telegram_user_id, tel
             'project': {
                 'key': project_key
             },
-            "assignee": {
-                "id": "712020:0abca624-07e3-4beb-bc81-b705121bb567"
-            },
-            "customfield_10062": str(telegram_user_id),
-            "customfield_10059": telegram_user_number,
-            "customfield_10060": telegram_user_full_name,
-            "customfield_10061": telegram_user_link,
+            # "assignee": {
+            #     "id": assignee_id
+            # },
             'summary': summary_from_user,
+            # 'customfield_10041': Group,
+            'customfield_10041': {
+                'id': group
+            },
+            # issuetype 10139 == Telegram
             'issuetype': {
-                'name': 'Task'
+                'id': issue_type
             },
             'description': {
                 "type": "doc",
@@ -53,7 +58,35 @@ def create_issue(summary_from_user: str, description: str, telegram_user_id, tel
                         ]
                     }
                 ]
-            }
+            },
+            'reporter': {
+                'id': reporter_id
+            },
+            # 'customfield_10065': 'DepartamentID',
+            'customfield_10065': {
+                'id': departament_id
+            },
+            'priority': {
+                'id': '3'
+            },
+            # 'customfield_10145': telegram_user_id,
+            'customfield_10145': str(telegram_user_id),
+            # 'customfield_10068': 'E-mix 3.x', Service name
+            'customfield_10068': {
+                'id': service_name_id
+            },
+            #'customfield_10069': 'Балансова Одиниця (Підрозділ)'
+            'customfield_10069': {
+                'id': balance_unit_id
+            },
+            # 'customfield_10146': 'Telegram @username'
+            'customfield_10146': telegram_user_name,
+            # ФИО пользователя из ЕРП для ТГ тикетов
+            'customfield_10244' : user_fio,
+            #Логін пользователя Ємікс 3 из ЕРП
+            'customfield_10245' : user_login,
+
+
         }
     })
 
@@ -72,10 +105,12 @@ def create_issue(summary_from_user: str, description: str, telegram_user_id, tel
     return response.json()['key']
 
 
-def add_comment_to_issue(message: str = None, issue_key: str = None):
-    url = f"https://zabutniy15.atlassian.net/rest/api/3/issue/{issue_key}/comment"
-
-    auth = HTTPBasicAuth("zabutniy15@gmail.com", os.getenv("JIRA_API_TOKEN"))
+def add_comment_to_issue(sender: str,message: str = None, issue_key: str = None):
+    url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}/comment"
+    if sender == 'telegram_user':
+        auth = HTTPBasicAuth("tgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_USER"))
+    else:
+        auth = HTTPBasicAuth("aitgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_AI"))
 
     headers = {
         "Accept": "application/json",
@@ -111,7 +146,10 @@ def add_comment_to_issue(message: str = None, issue_key: str = None):
     print(json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": ")))
 
 def main():
-    add_comment_to_issue()
+    # add_comment_to_issue()
+    key = create_issue(summary_from_user='test', description='test', telegram_user_id='123', service_app_name='test', telegram_user_link='test')
+
+    print(key)
 
 if __name__ == '__main__':
     main()

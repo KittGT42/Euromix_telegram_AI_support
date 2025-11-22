@@ -16,6 +16,7 @@ class TelegramUser(SQLModel, table=True):
     )
     telegram_user_name: str = Field(max_length=255)
     telegram_user_phone: str = Field(max_length=255)
+    erp_user_token: str = Field(max_length=255)
 
     # Зв'язок з повідомленнями (один користувач - багато повідомлень)
     messages: List["ChatHistory"] = Relationship(

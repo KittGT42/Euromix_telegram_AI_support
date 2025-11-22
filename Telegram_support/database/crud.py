@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # ============= КОРИСТУВАЧІ =============
 
-def create_user(telegram_id: int, telegram_name: str, phone: str) -> bool:
+def create_user(telegram_id: int, telegram_name: str, phone: str, erp_user_token: str) -> bool:
     """Створює користувача бота підтримки"""
     try:
         with Session(engine) as session:
@@ -31,7 +31,8 @@ def create_user(telegram_id: int, telegram_name: str, phone: str) -> bool:
             user = TelegramUser(
                 telegram_user_id=telegram_id,
                 telegram_user_name=telegram_name,
-                telegram_user_phone=phone
+                telegram_user_phone=phone,
+                erp_user_token=erp_user_token
             )
             session.add(user)
             session.commit()
@@ -60,12 +61,36 @@ def get_user_by_telegram_id(telegram_id: int) -> Optional[Tuple]:
                     user.id,
                     user.telegram_user_id,
                     user.telegram_user_name,
-                    user.telegram_user_phone
+                    user.telegram_user_phone,
+                    user.erp_user_token
                 )
             return None
     except Exception as e:
         logger.error(f"❌ Error getting user: {e}")
         return None
+
+def update_erp_user_token(telegram_user_id: str, new_erp_user_token: str) -> bool:
+    try:
+        with Session(engine) as session:
+            statement = select(TelegramUser).where(
+                TelegramUser.telegram_user_id == telegram_user_id
+            )
+            telegram_user = session.exec(statement).first()
+
+            if not telegram_user:
+                logger.warning(f"Issue {telegram_user_id} not found")
+                return False
+
+            telegram_user.erp_user_token = new_erp_user_token
+            session.add(telegram_user)
+            session.commit()
+
+            logger.info(f"✅ Jira issue {new_erp_user_token} updated for user with id {telegram_user_id}")
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Error updating jira issue: {e}")
+        return False
 
 # ============= ІСТОРІЯ ЧАТУ =============
 
@@ -218,32 +243,6 @@ def update_jira_issue_status(jira_issue_key: str, jira_new_status: str = 'Done')
     except Exception as e:
         logger.error(f"❌ Error updating jira issue: {e}")
         return False
-
-
-def get_issue_status_by_issue_key(issue_key: str) -> Optional[str]:
-    """
-    ✅ ЗМІНЕНО: тепер повертає тільки статус (str), а не tuple
-    Повертає статус Jira issue за його ключем.
-
-    Args:
-        issue_key: ключ issue (наприклад 'TP-17')
-
-    Returns:
-        str: статус issue ('To Do', 'Done', ...) або None якщо не знайдено
-    """
-    try:
-        with Session(engine) as session:
-            statement = select(JiraIssueStatus).where(
-                JiraIssueStatus.issue_key == issue_key
-            )
-            jira_issue = session.exec(statement).first()
-
-            if jira_issue:
-                return jira_issue.category_status_issue  # ✅ Тільки статус
-            return None
-    except Exception as e:
-        logger.error(f"❌ Error getting issue status: {e}")
-        return None
 
 
 def get_active_issue_for_user(telegram_user_id: int) -> Optional[str]:

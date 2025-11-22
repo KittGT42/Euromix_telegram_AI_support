@@ -15,8 +15,8 @@ from Telegram_support.database.crud import (
     get_chat_history,
     clear_chat_history,
     get_chat_history_count,
-    get_issue_status_by_issue_key,
     get_active_issue_for_user,
+    update_erp_user_token
 
 )
 
@@ -35,6 +35,8 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE  = range(4)
+part_of_url_data_base = settings.PART_OF_URL_DATABASE
+
 
 
 def ask_to_open_web_ui_agent(messages_array):
@@ -67,6 +69,27 @@ def ask_to_open_web_ui_agent(messages_array):
 
     return ai_response
 
+def get_user_token(phone_number):
+    data_response = requests.post(f"https://mobile.euromix.in.ua/{part_of_url_data_base}/hs/ex3/sign_in",
+                                  json={"identity": {"phone": phone_number}})
+    data_response_json = data_response.json()
+    if data_response.status_code == 401:
+        return False
+    user_token = data_response_json['data']['access_token']
+    return user_token
+
+def get_user_data(user_token):
+    url = f'https://mobile.euromix.in.ua/{part_of_url_data_base}/hs/ex3/profile'
+    headers = {
+        'Accept': '*/*',
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {user_token}',
+    }
+
+    response = requests.get(url, headers=headers)
+    status_response = response.status_code
+
+    return response, status_response
 
 class SupportAiAgent:
     def __init__(self, token):
@@ -157,7 +180,23 @@ class SupportAiAgent:
 
         if update.message.contact:
             phone_user = update.message.contact.phone_number
-            create_user(telegram_id=user_id, telegram_name=full_name_user, phone=phone_user)
+            erp_user_token = get_user_token(phone_user)
+
+            if erp_user_token:
+                # Збереження користувача
+                create_user(telegram_id=user_id, telegram_name=full_name_user, phone=phone_user, erp_user_token=erp_user_token)
+            else:
+                button = KeyboardButton("📱 Поділитися номером", request_contact=True)
+                keyboard = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
+
+                await update.message.reply_text(
+                    """
+                    ❗☎️ Номери відрізняються!\n\n🔎 Перевірте номер телефону, який ви надсилаєте — він повинен повністю збігатися з номером телефона вашого аккаунта в Euromix.\n\n🆘 Зверніться до підтримки що б вирішити питання з номером телефона
+                    """,
+                    reply_markup=keyboard
+                )
+                return PHONE
+
 
         else:
             button = KeyboardButton("📱 Поділитися номером", request_contact=True)
@@ -177,28 +216,43 @@ class SupportAiAgent:
         return START_CHAT
 
     async def create_summary_jira_issue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_message = update.message.text
         telegram_user_id_from_chat = update.effective_user.id
-        user = get_user_by_telegram_id(telegram_user_id_from_chat)
-        telegram_user_name_from_chat = update.effective_user.full_name
-        telegram_user_phone_from_chat = user[3]
-        telegram_user_link_from_chat = update.effective_user.link
+        user_data = get_user_by_telegram_id(telegram_user_id_from_chat)
+
+        response, status_response = get_user_data(user_data[4])
+        if status_response != 200:
+            user_token = get_user_token(user_data[3])
+            update_token = update_erp_user_token(user_data[1], user_token)
+            response, status_response = get_user_data(user_data[4])
+        else:
+            pass
+
+        user_full_name = response.json()['fullName']
+        departament = response.json()['departmentJiraId']
+        balance_unit = response.json()['balanceUnitJiraId']
+        user_login = response.json()['login']
+
+
+        user_message = update.message.text
+        telegram_user_name = update.effective_user.username
 
         returned_issue_key = create_issue(summary_from_user=user_message, description='',
                                           telegram_user_id=telegram_user_id_from_chat,
-                                          telegram_user_number=telegram_user_phone_from_chat,
-                                          telegram_user_full_name=telegram_user_name_from_chat,
-                                          telegram_user_link=telegram_user_link_from_chat)
+                                          departament_id=departament, balance_unit_id=balance_unit,
+                                          telegram_user_name=telegram_user_name,
+                                          user_fio=user_full_name,
+                                          user_login=user_login,
+                                          )
 
         save_message(telegram_user_id_from_chat, "user", user_message)
-        add_comment_to_issue(message=user_message, issue_key=returned_issue_key)
+        add_comment_to_issue(sender='telegram_user' ,message=user_message, issue_key=returned_issue_key)
 
         # 3️⃣ Відправляємо всю історію в OpenWebUI API
         ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": user_message}])
 
         # 4️⃣ Зберігаємо відповідь асистента
         save_message(telegram_user_id_from_chat, "assistant", ai_answer)
-        add_comment_to_issue(message=ai_answer, issue_key=returned_issue_key)
+        add_comment_to_issue(sender='ai_response' ,message=ai_answer, issue_key=returned_issue_key)
 
         # 5️⃣ Відправляємо відповідь користувачу
         await update.message.reply_text(ai_answer)
@@ -232,20 +286,6 @@ class SupportAiAgent:
             )
             return ConversationHandler.END
 
-        # Перевіряємо чи не закритий тікет
-        status_issue = get_issue_status_by_issue_key(active_issue_key)
-        if status_issue == 'Done':
-            keyboard = ReplyKeyboardMarkup([
-                ["Почати діалог"],
-            ], resize_keyboard=True, one_time_keyboard=True)
-
-            await update.message.reply_text(
-                f"✅ Ваш тікет {user_data[4]} вже оброблений\n"
-                f"Що б створити новий натисніть кнопку Почати діалог",
-                reply_markup=keyboard
-            )
-            return ConversationHandler.END
-
         # Перевіряємо чи користувач існує
         user_db = get_user_by_telegram_id(user_id)
         if not user_db:
@@ -255,14 +295,14 @@ class SupportAiAgent:
             return ConversationHandler.END
 
         save_message(user_id, "user", message_from_user)
-        add_comment_to_issue(message=message_from_user, issue_key=active_issue_key)  # ✅
+        add_comment_to_issue(sender='telegram_user', message=message_from_user, issue_key=active_issue_key)  # ✅
 
         history = get_chat_history(user_id, limit=10)
 
         ai_answer = ask_to_open_web_ui_agent(history)
 
         save_message(user_id, "assistant", ai_answer)
-        add_comment_to_issue(message=ai_answer, issue_key=active_issue_key)  # ✅
+        add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)  # ✅
 
         # 5️⃣ Відправляємо відповідь користувачу
         await update.message.reply_text(ai_answer)
