@@ -13,6 +13,7 @@ from Telegram_support.database.crud import (
     get_user_by_telegram_id,
     save_message,
     get_chat_history,
+    get_chat_history_by_issue,
     clear_chat_history,
     get_chat_history_count,
     get_active_issue_for_user,
@@ -244,14 +245,14 @@ class SupportAiAgent:
                                           user_login=user_login,
                                           )
 
-        save_message(telegram_user_id_from_chat, "user", user_message)
+        save_message(telegram_user_id_from_chat, "user", user_message, issue_key=returned_issue_key)
         add_comment_to_issue(sender='telegram_user' ,message=user_message, issue_key=returned_issue_key)
 
         # 3️⃣ Відправляємо всю історію в OpenWebUI API
         ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": user_message}])
 
         # 4️⃣ Зберігаємо відповідь асистента
-        save_message(telegram_user_id_from_chat, "assistant", ai_answer)
+        save_message(telegram_user_id_from_chat, "assistant", ai_answer, issue_key=returned_issue_key)
         add_comment_to_issue(sender='ai_response' ,message=ai_answer, issue_key=returned_issue_key)
 
         # 5️⃣ Відправляємо відповідь користувачу
@@ -294,14 +295,15 @@ class SupportAiAgent:
             )
             return ConversationHandler.END
 
-        save_message(user_id, "user", message_from_user)
+        save_message(user_id, "user", message_from_user, issue_key=active_issue_key)
         add_comment_to_issue(sender='telegram_user', message=message_from_user, issue_key=active_issue_key)  # ✅
 
-        history = get_chat_history(user_id, limit=10)
+        # Отримуємо історію саме по цьому тікету
+        history = get_chat_history_by_issue(active_issue_key, limit=10)
 
         ai_answer = ask_to_open_web_ui_agent(history)
 
-        save_message(user_id, "assistant", ai_answer)
+        save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
         add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)  # ✅
 
         # 5️⃣ Відправляємо відповідь користувачу

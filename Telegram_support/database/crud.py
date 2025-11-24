@@ -94,7 +94,7 @@ def update_erp_user_token(telegram_user_id: str, new_erp_user_token: str) -> boo
 
 # ============= ІСТОРІЯ ЧАТУ =============
 
-def save_message(user_id: int, role: str, message: str) -> bool:
+def save_message(user_id: int, role: str, message: str, issue_key: Optional[str] = None) -> bool:
     """
     Зберігає повідомлення в історію чату.
 
@@ -102,17 +102,20 @@ def save_message(user_id: int, role: str, message: str) -> bool:
         user_id: telegram_user_id користувача
         role: "user" або "assistant"
         message: текст повідомлення
+        issue_key: ключ Jira issue (опціонально)
     """
     try:
         with Session(engine) as session:
             chat_message = ChatHistory(
                 user_id=user_id,
                 role=role,
-                message=message
+                message=message,
+                issue_key=issue_key
             )
             session.add(chat_message)
             session.commit()
-            logger.info(f"💾 Message saved for user {user_id}")
+            issue_info = f" for issue {issue_key}" if issue_key else ""
+            logger.info(f"💾 Message saved for user {user_id}{issue_info}")
             return True
     except Exception as e:
         logger.error(f"❌ Error saving message: {e}")
@@ -151,6 +154,41 @@ def get_chat_history(user_id: int, limit: int = 10) -> List[dict]:
             return messages
     except Exception as e:
         logger.error(f"❌ Error getting chat history: {e}")
+        return []
+
+
+def get_chat_history_by_issue(issue_key: str, limit: int = 10) -> List[dict]:
+    """
+    Дістає останні N повідомлень для конкретного Jira issue.
+    Повертає у форматі для OpenWebUI API.
+
+    Args:
+        issue_key: ключ Jira issue (наприклад 'TP-123')
+        limit: кількість останніх повідомлень
+
+    Returns:
+        List[dict]: [{"role": "user", "content": "..."}, ...]
+    """
+    try:
+        with Session(engine) as session:
+            statement = (
+                select(ChatHistory)
+                .where(ChatHistory.issue_key == issue_key)
+                .order_by(desc(ChatHistory.timestamp))
+                .limit(limit)
+            )
+            results = session.exec(statement).all()
+
+            # Перевертаємо, бо треба від старого до нового
+            messages = [
+                {"role": msg.role, "content": msg.message}
+                for msg in reversed(results)
+            ]
+
+            logger.info(f"📜 Retrieved {len(messages)} messages for issue {issue_key}")
+            return messages
+    except Exception as e:
+        logger.error(f"❌ Error getting chat history for issue: {e}")
         return []
 
 

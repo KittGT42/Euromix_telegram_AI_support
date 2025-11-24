@@ -43,6 +43,11 @@ class ChatHistory(SQLModel, table=True):
     role: str = Field(max_length=20)  # "user" або "assistant"
     message: str
     timestamp: datetime = Field(default_factory=datetime.now)
+    issue_key: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        index=True
+    )
 
     # Зв'язок з користувачем
     user: Optional[TelegramUser] = Relationship(back_populates="messages")
