@@ -12,7 +12,6 @@ from Telegram_support.database.crud import (
     create_user,
     get_user_by_telegram_id,
     save_message,
-    get_chat_history,
     get_chat_history_by_issue,
     clear_chat_history,
     get_chat_history_count,
@@ -34,6 +33,53 @@ load_dotenv()
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def send_telegram_message(telegram_user_id: int, message_text: str, issue_key: str = None):
+    """
+    Відправляє повідомлення користувачу через Telegram Bot API
+    і зберігає його в базу даних
+
+    Args:
+        telegram_user_id: ID користувача в Telegram
+        message_text: текст повідомлення
+        issue_key: ключ Jira issue (опціонально)
+
+    Returns:
+        bool: True якщо успішно, False якщо помилка
+    """
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+
+    payload = {
+        "chat_id": telegram_user_id,
+        "text": message_text,
+        "parse_mode": "HTML"
+    }
+
+    try:
+        # Відправляємо повідомлення
+        response = requests.post(url, json=payload)
+
+        if response.status_code == 200:
+            logger.info(f"✅ Повідомлення надіслано користувачу {telegram_user_id}")
+
+            # Зберігаємо повідомлення в базу даних
+            save_message(
+                user_id=telegram_user_id,
+                role="assistant",
+                message=message_text,
+                issue_key=issue_key
+            )
+
+            return True
+        else:
+            logger.error(f"❌ Помилка відправки: {response.status_code} - {response.text}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Помилка при відправці повідомлення: {e}")
+        return False
 
 START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE  = range(4)
 part_of_url_data_base = settings.PART_OF_URL_DATABASE

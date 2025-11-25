@@ -313,3 +313,31 @@ def get_active_issue_for_user(telegram_user_id: int) -> Optional[str]:
     except Exception as e:
         logger.error(f"❌ Error getting active issue: {e}")
         return None
+
+
+def get_telegram_user_id_by_issue(issue_key: str) -> Optional[int]:
+    """
+    Повертає telegram_user_id по issue_key
+
+    Args:
+        issue_key: ключ Jira issue (наприклад 'TP-123')
+
+    Returns:
+        int: telegram_user_id або None якщо не знайдено
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(JiraIssueStatus).where(
+                JiraIssueStatus.issue_key == issue_key
+            )
+            jira_issue = session.exec(statement).first()
+
+            if jira_issue:
+                logger.info(f"✅ Found telegram_user_id {jira_issue.telegram_user_id} for issue {issue_key}")
+                return jira_issue.telegram_user_id
+
+            logger.warning(f"⚠️ No telegram_user_id found for issue {issue_key}")
+            return None
+    except Exception as e:
+        logger.error(f"❌ Error getting telegram_user_id by issue: {e}")
+        return None
