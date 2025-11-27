@@ -145,11 +145,52 @@ def add_comment_to_issue(sender: str,message: str = None, issue_key: str = None)
 
     print(json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": ")))
 
+def update_jira_issue(summary: str, description: str, issue_key: str = None):
+    url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}"
+
+    auth = HTTPBasicAuth("Dmitriy.Kostromskiy@euromix.in.ua", os.getenv("JIRA_API_TOKEN"))
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json"
+    }
+
+    data = json.dumps({
+        'fields': {
+            'summary': summary,
+            'description': {
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": description
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    })
+
+    response = requests.request(
+        "PUT",
+        url,
+        data=data,
+        headers=headers,
+        auth=auth
+    )
+
+    return response.status_code
+
 def main():
     # add_comment_to_issue()
-    key = create_issue(summary_from_user='test', description='test', telegram_user_id='123', service_app_name='test', telegram_user_link='test')
 
-    print(key)
+    update_issue = update_jira_issue(summary_from_user='test112233', description='test777', issue_key='SD-48007')
+    print(update_issue)
 
 if __name__ == '__main__':
     main()

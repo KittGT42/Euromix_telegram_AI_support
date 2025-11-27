@@ -16,8 +16,9 @@ from Telegram_support.database.crud import (
     clear_chat_history,
     get_chat_history_count,
     get_active_issue_for_user,
-    update_erp_user_token
-
+    update_erp_user_token,
+    get_jira_issue_status,
+    get_jira_issue_ai_work_status
 )
 
 from Telegram_support.utils.jira import create_issue, add_comment_to_issue
@@ -319,9 +320,13 @@ class SupportAiAgent:
 
         # Отримуємо активний issue користувача
         active_issue_key = get_active_issue_for_user(user_id)
+        if active_issue_key:
+            issue_jira_status = get_jira_issue_status(active_issue_key)
+        else:
+            issue_jira_status = None
 
         # Якщо немає активного issue - пропонуємо створити новий
-        if not active_issue_key:
+        if not active_issue_key or issue_jira_status == 'Done':
             keyboard = ReplyKeyboardMarkup([
                 ["Почати діалог"],
             ], resize_keyboard=True, one_time_keyboard=True)
@@ -342,18 +347,20 @@ class SupportAiAgent:
             return ConversationHandler.END
 
         save_message(user_id, "user", message_from_user, issue_key=active_issue_key)
-        add_comment_to_issue(sender='telegram_user', message=message_from_user, issue_key=active_issue_key)  # ✅
+        add_comment_to_issue(sender='telegram_user', message=message_from_user, issue_key=active_issue_key)
 
-        # Отримуємо історію саме по цьому тікету
-        history = get_chat_history_by_issue(active_issue_key, limit=10)
+        ia_work_status = get_jira_issue_ai_work_status(jira_issue_key=active_issue_key)
+        if ia_work_status:
+            # Отримуємо історію саме по цьому тікету
+            history = get_chat_history_by_issue(active_issue_key, limit=10)
 
-        ai_answer = ask_to_open_web_ui_agent(history)
+            ai_answer = ask_to_open_web_ui_agent(history)
 
-        save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
-        add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)  # ✅
+            save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
+            add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
 
-        # 5️⃣ Відправляємо відповідь користувачу
-        await update.message.reply_text(ai_answer)
+            # 5️⃣ Відправляємо відповідь користувачу
+            await update.message.reply_text(ai_answer)
 
         return START_CHAT
 

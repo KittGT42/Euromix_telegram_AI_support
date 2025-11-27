@@ -58,19 +58,17 @@ class JiraIssueStatus(SQLModel, table=True):
     __tablename__ = "telegram_ai_support_jira_issue_status"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-
     telegram_user_id: int = Field(
         foreign_key="telegram_ai_support_users.telegram_user_id",
         index=True,
         sa_type=BigInteger
     )
-
     issue_key: str = Field(
         max_length=255,
         unique=True,
         index=True
     )
-
+    ai_work_status: bool = Field(default=True)
     category_status_issue: str = Field(max_length=255, default='To Do')
     service_app_name: str = Field(max_length=255, default='')
     group_support_name: str = Field(max_length=255, default='ТехПідтримка')

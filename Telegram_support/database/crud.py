@@ -251,6 +251,33 @@ def save_jira_issue(telegram_user_id: int, issue_key: str, service_app_name: str
         logger.error(f"❌ Error saving issue: {e}")
         return False
 
+def get_jira_issue_status(jira_issue_key: str) -> str:
+    """
+    Отримує статус Jira issue
+
+    Args:
+        jira_issue_key: ключ issue (наприклад 'TP-17')
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(JiraIssueStatus).where(
+                JiraIssueStatus.issue_key == jira_issue_key
+            )
+            jira_issue = session.exec(statement).first()
+
+            if not jira_issue:
+                logger.warning(f"Issue {jira_issue_key} not found")
+                return f'Issue {jira_issue_key} not found'
+
+            jira_issue_status = jira_issue.category_status_issue
+
+
+            return jira_issue_status
+
+    except Exception as e:
+        logger.error(f"❌ Error getting jira issue: {e}")
+        return f'Error getting jira issue: {e}'
+
 
 def update_jira_issue_status(jira_issue_key: str, jira_new_status: str = 'Done') -> bool:
     """
@@ -280,6 +307,63 @@ def update_jira_issue_status(jira_issue_key: str, jira_new_status: str = 'Done')
 
     except Exception as e:
         logger.error(f"❌ Error updating jira issue: {e}")
+        return False
+
+def update_jira_issue_ai_work_status(jira_issue_key: str, jira_new_ai_work_status: bool = False) -> bool:
+    """
+    Оновлює статус Jira issue ai work status
+
+    Args:
+        jira_issue_key: ключ issue (наприклад 'TP-17')
+        jira_new_ai_work_status: новий статус (за замовчуванням False)
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(JiraIssueStatus).where(
+                JiraIssueStatus.issue_key == jira_issue_key
+            )
+            jira_issue_ai_work_status = session.exec(statement).first()
+
+            if not jira_issue_ai_work_status:
+                logger.warning(f"Issue {jira_issue_key} not found")
+                return False
+
+            jira_issue_ai_work_status.ai_work_status = jira_new_ai_work_status
+            session.add(jira_issue_ai_work_status)
+            session.commit()
+
+            logger.info(f"✅ Jira ai work status in jira issue ticket {jira_issue_key} updated to status {jira_new_ai_work_status}")
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Error updating jira issue: {e}")
+        return False
+
+def get_jira_issue_ai_work_status(jira_issue_key: str) -> bool:
+    """
+    Отримує статус Jira issue ai_work_status
+
+    Args:
+        jira_issue_key: ключ issue (наприклад 'TP-17')
+    """
+    try:
+        with Session(engine) as session:
+            statement = select(JiraIssueStatus).where(
+                JiraIssueStatus.issue_key == jira_issue_key
+            )
+            jira_issue = session.exec(statement).first()
+
+            if not jira_issue:
+                logger.warning(f"Issue {jira_issue_key} not found")
+                return False
+
+            ai_work_status = jira_issue.ai_work_status
+
+
+            return ai_work_status
+
+    except Exception as e:
+        logger.error(f"❌ Error getting jira issue: {e}")
         return False
 
 
@@ -341,3 +425,12 @@ def get_telegram_user_id_by_issue(issue_key: str) -> Optional[int]:
     except Exception as e:
         logger.error(f"❌ Error getting telegram_user_id by issue: {e}")
         return None
+
+
+def main():
+    # print(get_jira_issue_status('SD-47982'))
+
+    result = get_chat_history_by_issue(issue_key='SD-48056')
+    print(result)
+if __name__ == "__main__":
+    main()
