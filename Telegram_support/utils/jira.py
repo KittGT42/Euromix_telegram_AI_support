@@ -7,6 +7,7 @@ from requests.auth import HTTPBasicAuth
 import json
 
 from Telegram_support.database.crud import save_jira_issue
+import re
 
 load_dotenv()
 
@@ -105,35 +106,65 @@ def create_issue(summary_from_user: str, description: str, telegram_user_id, dep
     return response.json()['key']
 
 
-def add_comment_to_issue(sender: str,message: str = None, issue_key: str = None):
-    url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}/comment"
+def add_comment_to_issue(sender: str, message: str = None, issue_key: str = None, attachment_filename: str = None):
+    """
+    Додає коментар до Jira issue
+
+    Args:
+        sender: 'telegram_user' або 'ai_response'
+        message: Текст коментаря
+        issue_key: Ключ Jira issue
+        attachment_filename: Ім'я файлу attachment для вставки в коментар (опціонально)
+    """
     if sender == 'telegram_user':
         auth = HTTPBasicAuth("tgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_USER"))
     else:
         auth = HTTPBasicAuth("aitgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_AI"))
 
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json"
-    }
+    # Якщо є attachment - використовуємо API v2 (підтримує Wiki markup)
+    if attachment_filename:
+        url = f"https://euromix.atlassian.net/rest/api/2/issue/{issue_key}/comment"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
 
-    payload = json.dumps({
-        "body": {
-            "content": [
-                {
-                    "content": [
-                        {
-                            "text": f"{message}",
-                            "type": "text"
-                        }
-                    ],
-                    "type": "paragraph"
-                }
-            ],
-            "type": "doc",
-            "version": 1
-        },
-    })
+        # Формуємо текст коментаря з Jira image syntax
+        comment_text = ""
+        if message:
+            comment_text = f"{message}\n\n"
+        comment_text += f"!{attachment_filename}|thumbnail!"
+
+        payload = json.dumps({
+            "body": comment_text
+        })
+    else:
+        # Без attachment - використовуємо API v3 (ADF формат)
+        url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}/comment"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json"
+        }
+
+        content = []
+        if message:
+            content.append({
+                "content": [
+                    {
+                        "text": f"{message}",
+                        "type": "text"
+                    }
+                ],
+                "type": "paragraph"
+            })
+
+        payload = json.dumps({
+            "body": {
+                "content": content,
+                "type": "doc",
+                "version": 1
+            },
+        })
 
     response = requests.request(
         "POST",
@@ -144,6 +175,7 @@ def add_comment_to_issue(sender: str,message: str = None, issue_key: str = None)
     )
 
     print(json.dumps(json.loads(response.text), sort_keys=True, indent=4, separators=(",", ": ")))
+    return response
 
 def update_jira_issue(summary: str, description: str, issue_key: str = None):
     url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}"
@@ -186,10 +218,107 @@ def update_jira_issue(summary: str, description: str, issue_key: str = None):
 
     return response.status_code
 
+
+def download_jira_attachment(issue_key, filename):
+    """
+    Завантажує attachment з Jira
+    """
+    auth = HTTPBasicAuth("Dmitriy.Kostromskiy@euromix.in.ua", os.getenv("JIRA_API_TOKEN"))
+
+    url = f"https://euromix.atlassian.net/rest/api/2/issue/{issue_key}"
+
+    response = requests.get(url, auth=auth)
+    issue_data = response.json()
+
+    # Шукаємо потрібний attachment
+    attachments = issue_data.get('fields', {}).get('attachment', [])
+
+    for attachment in attachments:
+        if filename in attachment['filename']:
+            # Завантажуємо файл
+            file_url = attachment['content']
+            file_response = requests.get(file_url, auth=auth)
+
+            return {
+                'content': file_response.content,
+                'filename': attachment['filename'],
+                'mimetype': attachment['mimeType']
+            }
+
+    return None
+
+
+def parse_jira_comment(body):
+    """
+    Розділяє Jira коментар на текст та інформацію про картинки
+    """
+    # Regex для знаходження Jira image syntax: !filename|parameters!
+    image_pattern = r'!([^|!]+)\|[^!]*!'
+
+    # Знаходимо всі картинки
+    images = re.findall(image_pattern, body)
+
+    # Видаляємо всі картинки з тексту
+    clean_text = re.sub(image_pattern, '', body).strip()
+
+    return {
+        'text': clean_text,
+        'images': images,
+        'images_count': len(images)
+    }
+
+
+def add_attachment_to_issue(issue_key: str, file_content: bytes, filename: str):
+    """
+    Завантажує файл як attachment до Jira issue
+
+    Args:
+        issue_key: Ключ Jira issue (наприклад, 'SD-12345')
+        file_content: Вміст файлу в bytes
+        filename: Ім'я файлу
+
+    Returns:
+        dict: {'success': True, 'attachment_id': 'xxx', 'filename': 'xxx'} якщо успішно
+        dict: {'success': False} якщо помилка
+    """
+    url = f"https://euromix.atlassian.net/rest/api/3/issue/{issue_key}/attachments"
+
+    auth = HTTPBasicAuth("tgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_USER"))
+
+    headers = {
+        "Accept": "application/json",
+        "X-Atlassian-Token": "no-check"
+    }
+
+    files = {
+        'file': (filename, file_content, 'image/jpeg')
+    }
+
+    try:
+        response = requests.post(url, headers=headers, files=files, auth=auth)
+
+        if response.status_code == 200:
+            attachment_data = response.json()[0]  # Jira повертає масив attachments
+            print(f"✅ Attachment {filename} додано до issue {issue_key}")
+            print(f"Attachment ID: {attachment_data.get('id')}")
+            return {
+                'success': True,
+                'attachment_id': attachment_data.get('id'),
+                'filename': attachment_data.get('filename')
+            }
+        else:
+            print(f"❌ Помилка додавання attachment: {response.status_code} - {response.text}")
+            return {'success': False}
+
+    except Exception as e:
+        print(f"❌ Помилка при завантаженні attachment: {e}")
+        return {'success': False}
+
+
 def main():
     # add_comment_to_issue()
 
-    update_issue = update_jira_issue(summary_from_user='test112233', description='test777', issue_key='SD-48007')
+    update_issue = update_jira_issue(summary='test112233', description='test777', issue_key='SD-48007')
     print(update_issue)
 
 if __name__ == '__main__':

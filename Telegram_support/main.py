@@ -21,7 +21,7 @@ from Telegram_support.database.crud import (
     get_jira_issue_ai_work_status
 )
 
-from Telegram_support.utils.jira import create_issue, add_comment_to_issue
+from Telegram_support.utils.jira import create_issue, add_comment_to_issue, add_attachment_to_issue
 
 from database.engine import create_all_tables
 
@@ -29,6 +29,8 @@ from configs.base_config import settings
 from dotenv import load_dotenv
 import requests
 import logging
+from io import BytesIO
+import json
 
 load_dotenv()
 
@@ -86,6 +88,77 @@ START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE  = range(4)
 part_of_url_data_base = settings.PART_OF_URL_DATABASE
 
 
+def send_telegram_photo(telegram_user_id: int, photo_content: bytes, filename: str, caption: str = None,
+                        issue_key: str = None):
+    """
+    Відправляє фото в Telegram з bytes (не з файлу на диску)
+    """
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+
+    try:
+        # Створюємо file-like object з bytes
+        files = {
+            'photo': (filename, BytesIO(photo_content), 'image/png')
+        }
+        data = {
+            'chat_id': telegram_user_id,
+            'caption': caption or '',
+            'parse_mode': 'HTML'
+        }
+
+        response = requests.post(url, data=data, files=files)
+
+        if response.status_code == 200:
+            logger.info(f"✅ Фото {filename} надіслано користувачу {telegram_user_id}")
+
+            save_message(
+                user_id=telegram_user_id,
+                role="assistant",
+                message=f"[Фото: {filename}]{' - ' + caption if caption else ''}",
+                issue_key=issue_key
+            )
+            return True
+        else:
+            logger.error(f"❌ Помилка відправки: {response.status_code} - {response.text}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Помилка: {e}")
+        return False
+
+
+def send_jira_images_as_album(telegram_user_id: int, issue_key: str, media: list, files_dict: dict,  message_text: str = None):
+    """
+    Відправляє всі картинки одним альбомом (до 10 штук)
+    """
+    try:
+        bot_token = settings.TELEGRAM_BOT_TOKEN
+        url = f"https://api.telegram.org/bot{bot_token}/sendMediaGroup"
+
+        data = {
+            'chat_id': telegram_user_id,
+            'media': json.dumps(media)
+        }
+
+        response = requests.post(url, data=data, files=files_dict)
+
+        if response.status_code == 200:
+            # Зберігаємо повідомлення в базу даних
+            save_message(
+                user_id=telegram_user_id,
+                role="assistant",
+                message=message_text,
+                issue_key=issue_key
+            )
+
+            logger.info(f"✅ Альбом з {len(media)} фото надіслано")
+            return True
+        else:
+            logger.error(f"❌ Помилка відправки альбому: {response.text}")
+            return False
+    except Exception as e:
+        print(f'Error')
 
 def ask_to_open_web_ui_agent(messages_array):
     """
@@ -167,10 +240,12 @@ class SupportAiAgent:
             ],
             states={
                 TAKE_SUMMARY: [
-                    MessageHandler(filters.TEXT, self.create_summary_jira_issue)
+                    MessageHandler(filters.TEXT, self.create_summary_jira_issue),
+                    MessageHandler(filters.PHOTO, self.handle_photo)
                 ],
                 START_CHAT: [
                     MessageHandler(filters.TEXT, self.send_message),
+                    MessageHandler(filters.PHOTO, self.handle_photo),
                     MessageHandler(filters.TEXT, self.confirm_phone),
                 ]
             },
@@ -186,6 +261,7 @@ class SupportAiAgent:
                 self.send_message
             )
         )
+        self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Початок авторизації"""
@@ -210,6 +286,150 @@ class SupportAiAgent:
             reply_markup=keyboard
         )
         return PHONE
+
+
+    async def handle_photo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробка фото від користувача"""
+        user_id = update.effective_user.id
+        user_db = get_user_by_telegram_id(user_id)
+
+        if not user_db:
+            await update.message.reply_text(
+                "❌ Спочатку авторізуйтесь через /start"
+            )
+            return ConversationHandler.END
+
+        # Отримуємо фото (беремо найбільший розмір)
+        photo = update.message.photo[-1]
+        photo_caption = update.message.caption or ""
+
+        try:
+            # Завантажуємо файл
+            photo_file = await context.bot.get_file(photo.file_id)
+            photo_bytes = await photo_file.download_as_bytearray()
+            filename = f"photo_{photo.file_id}.jpg"
+
+            # Отримуємо активний issue користувача
+            active_issue_key = get_active_issue_for_user(user_id)
+
+            # ВИПАДОК 1: Немає активного issue - створюємо новий (стан TAKE_SUMMARY)
+            if not active_issue_key:
+                # Отримуємо дані користувача з ERP
+                response, status_response = get_user_data(user_db[4])
+                if status_response != 200:
+                    user_token = get_user_token(user_db[3])
+                    update_erp_user_token(user_db[1], user_token)
+                    response, status_response = get_user_data(user_db[4])
+
+                user_full_name = response.json()['fullName']
+                departament = response.json()['departmentJiraId']
+                balance_unit = response.json()['balanceUnitJiraId']
+                user_login = response.json()['login']
+                telegram_user_name = update.effective_user.username
+
+                # Створюємо summary з підпису або дефолтного тексту
+                summary_text = photo_caption if photo_caption else "Фото від користувача"
+
+                # Створюємо новий issue
+                returned_issue_key = create_issue(
+                    summary_from_user=summary_text,
+                    description='',
+                    telegram_user_id=user_id,
+                    departament_id=departament,
+                    balance_unit_id=balance_unit,
+                    telegram_user_name=telegram_user_name,
+                    user_fio=user_full_name,
+                    user_login=user_login,
+                )
+
+                # Додаємо фото як attachment
+                attachment_result = add_attachment_to_issue(
+                    issue_key=returned_issue_key,
+                    file_content=bytes(photo_bytes),
+                    filename=filename
+                )
+
+                if photo_caption:
+                    save_message(user_id, "user", photo_caption, issue_key=returned_issue_key)
+
+                    # Створюємо коментар з фото
+                    add_comment_to_issue(
+                        sender='telegram_user',
+                        message=summary_text,
+                        issue_key=returned_issue_key,
+                        attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
+                    )
+
+                    # Отримуємо відповідь від AI
+                    ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": summary_text}])
+
+                    save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
+                    add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
+
+                    await update.message.reply_text(ai_answer)
+
+                    return START_CHAT
+                else:
+                    # Якщо немає підпису - просто додаємо коментар з фото
+                    if attachment_result.get('success'):
+                        add_comment_to_issue(
+                            sender='telegram_user',
+                            message=None,
+                            issue_key=returned_issue_key,
+                            attachment_filename=attachment_result.get('filename')
+                        )
+                    return START_CHAT
+
+            # ВИПАДОК 2: Є активний issue - додаємо фото до нього (стан START_CHAT)
+            issue_jira_status = get_jira_issue_status(active_issue_key)
+            if issue_jira_status == 'Done':
+                keyboard = ReplyKeyboardMarkup([
+                    ["Почати діалог"],
+                ], resize_keyboard=True, one_time_keyboard=True)
+
+                await update.message.reply_text(
+                    f"У вас немає активних звернень"
+                    f"Щоб створити нове звернення, натисніть кнопку 'Почати діалог'",
+                    reply_markup=keyboard
+                )
+                return ConversationHandler.END
+
+            # Додаємо attachment до існуючого issue
+            attachment_result = add_attachment_to_issue(
+                issue_key=active_issue_key,
+                file_content=bytes(photo_bytes),
+                filename=filename
+            )
+
+            if attachment_result.get('success'):
+                message_text = f"[Фото: {filename}]"
+                if photo_caption:
+                    message_text = photo_caption
+
+                save_message(user_id, "user", message_text, issue_key=active_issue_key)
+
+                # Створюємо коментар з attachment
+                add_comment_to_issue(
+                    sender='telegram_user',
+                    message=message_text if photo_caption else None,
+                    issue_key=active_issue_key,
+                    attachment_filename=attachment_result.get('filename')
+                )
+
+                return START_CHAT
+            else:
+                await update.message.reply_text(
+                    "❌ Помилка при завантаженні фото. Спробуйте ще раз"
+                )
+                return START_CHAT
+
+        except Exception as e:
+            logger.error(f"❌ Помилка при обробці фото: {e}")
+            await update.message.reply_text(
+                "❌ Помилка при обробці фото. Спробуйте ще раз"
+            )
+
+        return START_CHAT
 
     async def confirm_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         button = KeyboardButton("📱 Поділитися номером", request_contact=True)
