@@ -65,6 +65,10 @@ def webhook_jira_comment():
 
             return "OK"
         elif image_count == 1:
+            try:
+                update_jira_issue_ai_work_status(issue_key, False)
+            except Exception as e:
+                print(f'Error updating jira issue ai work status: {e}')
             attachment = download_jira_attachment(issue_key, images_names[0])
             if attachment:
                 send_telegram_photo(
@@ -76,6 +80,10 @@ def webhook_jira_comment():
                 )
             return "OK"
         elif 2 <= image_count <= 10:
+            try:
+                update_jira_issue_ai_work_status(issue_key, False)
+            except Exception as e:
+                print(f'Error updating jira issue ai work status: {e}')
             try:
                 # Підготовка media array
                 media = []
@@ -118,6 +126,10 @@ def webhook_jira_comment():
                 return "ERROR", 500
 
         elif image_count > 10:
+            try:
+                update_jira_issue_ai_work_status(issue_key, False)
+            except Exception as e:
+                print(f'Error updating jira issue ai work status: {e}')
             if message_to_user:
                 send_telegram_message(telegram_user_id=telegram_user_id,
                                       message_text=message_to_user,issue_key=issue_key)

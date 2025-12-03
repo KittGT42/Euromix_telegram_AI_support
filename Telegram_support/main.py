@@ -22,6 +22,7 @@ from Telegram_support.database.crud import (
 )
 
 from Telegram_support.utils.jira import create_issue, add_comment_to_issue, add_attachment_to_issue
+from Telegram_support.utils.open_web_ui_agents_requests import ask_to_open_web_ui_agent, chat_with_image
 
 from database.engine import create_all_tables
 
@@ -160,35 +161,6 @@ def send_jira_images_as_album(telegram_user_id: int, issue_key: str, media: list
     except Exception as e:
         print(f'Error')
 
-def ask_to_open_web_ui_agent(messages_array):
-    """
-    Відправляє масив повідомлень в OpenWebUI API.
-
-    Args:
-        messages_array: List[dict] у форматі [{"role": "user", "content": "..."}]
-    """
-    response = requests.post(
-        "https://ai.euromix.in.ua/api/chat/completions",
-        headers={
-            "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjhjOWQ2ZTBkLWRmYzMtNDNmNy1hZjcxLWFjMjJlNWI1NWNkOSJ9.H3aCuXDzE7iYr1INXbbkFzMZbCux2BFc7wwPSiAxzUI",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "euromixsupportagent",
-            "messages": messages_array,
-            "stream": False,
-            "files": [
-                {"type": "collection", "id": "ffc3373a-148f-49dc-947f-fd8db6e6d9cc"}
-            ]
-        }
-    )
-
-    ai_response = ""
-    if response.status_code == 200:
-        result = response.json()
-        ai_response = result['choices'][0]['message']['content']
-
-    return ai_response
 
 def get_user_token(phone_number):
     data_response = requests.post(f"https://mobile.euromix.in.ua/{part_of_url_data_base}/hs/ex3/sign_in",
@@ -312,6 +284,7 @@ class SupportAiAgent:
             # Отримуємо активний issue користувача
             active_issue_key = get_active_issue_for_user(user_id)
 
+
             # ВИПАДОК 1: Немає активного issue - створюємо новий (стан TAKE_SUMMARY)
             if not active_issue_key:
                 # Отримуємо дані користувача з ERP
@@ -349,8 +322,10 @@ class SupportAiAgent:
                     filename=filename
                 )
 
+                ai_work_status = get_jira_issue_ai_work_status(jira_issue_key=returned_issue_key)
                 if photo_caption:
                     save_message(user_id, "user", photo_caption, issue_key=returned_issue_key)
+                    history = get_chat_history_by_issue(returned_issue_key, limit=10)
 
                     # Створюємо коментар з фото
                     add_comment_to_issue(
@@ -360,13 +335,16 @@ class SupportAiAgent:
                         attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
                     )
 
-                    # Отримуємо відповідь від AI
-                    ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": summary_text}])
 
-                    save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
-                    add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
+                    if ai_work_status:
+                        # Отримуємо відповідь від AI
+                        ai_answer = chat_with_image(messages_array=history, image_bytes=bytes(photo_bytes))
 
-                    await update.message.reply_text(ai_answer)
+                        save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
+                        add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
+
+                        await update.message.reply_text(ai_answer)
+                        return START_CHAT
 
                     return START_CHAT
                 else:
@@ -378,10 +356,20 @@ class SupportAiAgent:
                             issue_key=returned_issue_key,
                             attachment_filename=attachment_result.get('filename')
                         )
+                        if ai_work_status:
+                            ai_answer = chat_with_image(messages_array=[{"role": "user", "content": 'що тут не так?'}], image_bytes=bytes(photo_bytes))
+
+                            save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
+                            add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
+
+                            await update.message.reply_text(ai_answer)
+                            return START_CHAT
+
                     return START_CHAT
 
             # ВИПАДОК 2: Є активний issue - додаємо фото до нього (стан START_CHAT)
             issue_jira_status = get_jira_issue_status(active_issue_key)
+            ai_work_status = get_jira_issue_ai_work_status(jira_issue_key=active_issue_key)
             if issue_jira_status == 'Done':
                 keyboard = ReplyKeyboardMarkup([
                     ["Почати діалог"],
@@ -402,21 +390,52 @@ class SupportAiAgent:
             )
 
             if attachment_result.get('success'):
-                message_text = f"[Фото: {filename}]"
+                message_text = None
                 if photo_caption:
                     message_text = photo_caption
 
-                save_message(user_id, "user", message_text, issue_key=active_issue_key)
+                if message_text:
+                    save_message(user_id, "user", message_text, issue_key=active_issue_key)
 
-                # Створюємо коментар з attachment
-                add_comment_to_issue(
-                    sender='telegram_user',
-                    message=message_text if photo_caption else None,
-                    issue_key=active_issue_key,
-                    attachment_filename=attachment_result.get('filename')
-                )
+                    # Створюємо коментар з фото
+                    add_comment_to_issue(
+                        sender='telegram_user',
+                        message=message_text,
+                        issue_key=active_issue_key,
+                        attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
+                    )
 
-                return START_CHAT
+                    if ai_work_status:
+                        # Отримуємо відповідь від AI
+                        history = get_chat_history_by_issue(active_issue_key, limit=10)
+                        ai_answer = chat_with_image(messages_array=history, image_bytes=bytes(photo_bytes))
+
+                        save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
+                        add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
+
+                        await update.message.reply_text(ai_answer)
+                        return START_CHAT
+
+                    return START_CHAT
+                else:
+                    # Якщо немає підпису - просто додаємо коментар з фото
+                    if attachment_result.get('success'):
+                        add_comment_to_issue(
+                            sender='telegram_user',
+                            message=None,
+                            issue_key=active_issue_key,
+                            attachment_filename=attachment_result.get('filename')
+                        )
+                        if ai_work_status:
+                            ai_answer = chat_with_image(messages_array=[{"role": "user", "content": 'що тут не так?'}], image_bytes=bytes(photo_bytes))
+
+                            save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
+                            add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
+
+                            await update.message.reply_text(ai_answer)
+                            return START_CHAT
+
+                    return START_CHAT
             else:
                 await update.message.reply_text(
                     "❌ Помилка при завантаженні фото. Спробуйте ще раз"
@@ -551,11 +570,8 @@ class SupportAiAgent:
                 ["Почати діалог"],
             ], resize_keyboard=True, one_time_keyboard=True)
 
-            await update.message.reply_text(
-                f"✅ У вас немає активних тікетів\n"
-                f"Щоб створити новий, натисніть кнопку 'Почати діалог'",
-                reply_markup=keyboard
-            )
+            await update.message.reply_text(f"Натисніть кнопку 'Почати діалог''",
+                reply_markup=keyboard)
             return ConversationHandler.END
 
         # Перевіряємо чи користувач існує
