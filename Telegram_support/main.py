@@ -23,6 +23,7 @@ from Telegram_support.database.crud import (
 
 from Telegram_support.utils.jira import create_issue, add_comment_to_issue, add_attachment_to_issue
 from Telegram_support.utils.open_web_ui_agents_requests import ask_to_open_web_ui_agent, chat_with_image
+from Telegram_support.utils.main import transcribe_voice
 
 from database.engine import create_all_tables
 
@@ -213,11 +214,13 @@ class SupportAiAgent:
             states={
                 TAKE_SUMMARY: [
                     MessageHandler(filters.TEXT, self.create_summary_jira_issue),
-                    MessageHandler(filters.PHOTO, self.handle_photo)
+                    MessageHandler(filters.PHOTO, self.handle_photo),
+                    MessageHandler(filters.VOICE, self.handle_voice)
                 ],
                 START_CHAT: [
                     MessageHandler(filters.TEXT, self.send_message),
                     MessageHandler(filters.PHOTO, self.handle_photo),
+                    MessageHandler(filters.VOICE, self.handle_voice),
                     MessageHandler(filters.TEXT, self.confirm_phone),
                 ]
             },
@@ -234,6 +237,7 @@ class SupportAiAgent:
             )
         )
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
+        self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Початок авторизації"""
@@ -446,6 +450,153 @@ class SupportAiAgent:
             logger.error(f"❌ Помилка при обробці фото: {e}")
             await update.message.reply_text(
                 "❌ Помилка при обробці фото. Спробуйте ще раз"
+            )
+
+        return START_CHAT
+
+    async def handle_voice(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробка голосових повідомлень від користувача"""
+        user_id = update.effective_user.id
+        user_db = get_user_by_telegram_id(user_id)
+
+        if not user_db:
+            await update.message.reply_text(
+                "❌ Спочатку авторізуйтесь через /start"
+            )
+            return ConversationHandler.END
+
+        try:
+            # Отримуємо голосове повідомлення
+            voice = update.message.voice
+
+            # Завантажуємо файл
+            voice_file = await context.bot.get_file(voice.file_id)
+            voice_bytes = await voice_file.download_as_bytearray()
+            filename = f"voice_{voice.file_id}.ogg"
+
+            # Конвертуємо голос в текст через OpenAI Whisper API
+            transcribed_text = await transcribe_voice(bytes(voice_bytes))
+
+            if not transcribed_text:
+                await update.message.reply_text(
+                    "❌ Не вдалося розпізнати голосове повідомлення. Спробуйте ще раз"
+                )
+                return START_CHAT
+
+            # Отримуємо активний issue користувача
+            active_issue_key = get_active_issue_for_user(user_id)
+
+            # ВИПАДОК 1: Немає активного issue - створюємо новий (стан TAKE_SUMMARY)
+            if not active_issue_key:
+                # Отримуємо дані користувача з ERP
+                response, status_response = get_user_data(user_db[4])
+                if status_response != 200:
+                    user_token = get_user_token(user_db[3])
+                    update_erp_user_token(user_db[1], user_token)
+                    response, status_response = get_user_data(user_db[4])
+
+                user_full_name = response.json()['fullName']
+                departament = response.json()['departmentJiraId']
+                balance_unit = response.json()['balanceUnitJiraId']
+                user_login = response.json()['login']
+                telegram_user_name = update.effective_user.username
+
+                # Створюємо новий issue з транскрибованим текстом
+                returned_issue_key = create_issue(
+                    summary_from_user=transcribed_text,
+                    description='',
+                    telegram_user_id=user_id,
+                    departament_id=departament,
+                    balance_unit_id=balance_unit,
+                    telegram_user_name=telegram_user_name,
+                    user_fio=user_full_name,
+                    user_login=user_login,
+                )
+
+                # Додаємо голосове повідомлення як attachment
+                attachment_result = add_attachment_to_issue(
+                    issue_key=returned_issue_key,
+                    file_content=bytes(voice_bytes),
+                    filename=filename
+                )
+
+                # Зберігаємо транскрибований текст
+                save_message(user_id, "user", f"[Голосове повідомлення]: {transcribed_text}", issue_key=returned_issue_key)
+
+                # Створюємо коментар з транскрибованим текстом
+                add_comment_to_issue(
+                    sender='telegram_user',
+                    message=f"Голосове повідомлення: {transcribed_text}",
+                    issue_key=returned_issue_key,
+                    attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
+                )
+
+                ai_work_status = get_jira_issue_ai_work_status(jira_issue_key=returned_issue_key)
+                if ai_work_status:
+                    # Отримуємо відповідь від AI
+                    ai_answer = ask_to_open_web_ui_agent([{"role": "user", "content": transcribed_text}])
+
+                    save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
+                    add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
+
+                    await update.message.reply_text(ai_answer)
+                else:
+                    await update.message.reply_text(f"📝 Розпізнано: {transcribed_text}")
+
+                return START_CHAT
+
+            # ВИПАДОК 2: Є активний issue - додаємо голосове повідомлення до нього (стан START_CHAT)
+            issue_jira_status = get_jira_issue_status(active_issue_key)
+            ai_work_status = get_jira_issue_ai_work_status(jira_issue_key=active_issue_key)
+
+            if issue_jira_status == 'Done':
+                keyboard = ReplyKeyboardMarkup([
+                    ["Почати діалог"],
+                ], resize_keyboard=True, one_time_keyboard=True)
+
+                await update.message.reply_text(
+                    f"У вас немає активних звернень"
+                    f"Щоб створити нове звернення, натисніть кнопку 'Почати діалог'",
+                    reply_markup=keyboard
+                )
+                return ConversationHandler.END
+
+            # Додаємо attachment до існуючого issue
+            attachment_result = add_attachment_to_issue(
+                issue_key=active_issue_key,
+                file_content=bytes(voice_bytes),
+                filename=filename
+            )
+
+            # Зберігаємо транскрибований текст
+            save_message(user_id, "user", f"[Голосове повідомлення]: {transcribed_text}", issue_key=active_issue_key)
+
+            # Створюємо коментар з транскрибованим текстом
+            add_comment_to_issue(
+                sender='telegram_user',
+                message=f"Голосове повідомлення: {transcribed_text}",
+                issue_key=active_issue_key,
+                attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
+            )
+
+            if ai_work_status:
+                # Отримуємо відповідь від AI
+                history = get_chat_history_by_issue(active_issue_key, limit=10)
+                ai_answer = ask_to_open_web_ui_agent(history)
+
+                save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
+                add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
+
+                await update.message.reply_text(ai_answer)
+            else:
+                await update.message.reply_text(transcribed_text)
+
+            return START_CHAT
+
+        except Exception as e:
+            logger.error(f"❌ Помилка при обробці голосового повідомлення: {e}")
+            await update.message.reply_text(
+                "❌ Помилка при обробці голосового повідомлення. Спробуйте ще раз"
             )
 
         return START_CHAT

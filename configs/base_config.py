@@ -19,6 +19,9 @@ class Settings:
     DB_USER : str = os.getenv("DB_USER")
     DB_PASSWORD : str = os.getenv("DB_PASSWORD")
 
+    # OpenAI API key for voice transcription
+    OPENAI_API_KEY : str = os.getenv("OPENAI_API_KEY")
+
 
 
 settings = Settings()
