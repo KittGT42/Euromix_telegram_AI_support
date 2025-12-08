@@ -130,6 +130,46 @@ def send_telegram_photo(telegram_user_id: int, photo_content: bytes, filename: s
         return False
 
 
+def send_telegram_video(telegram_user_id: int, video_content: bytes, filename: str, caption: str = None,
+                        issue_key: str = None):
+    """
+    Відправляє відео в Telegram з bytes (не з файлу на диску)
+    """
+    bot_token = settings.TELEGRAM_BOT_TOKEN
+    url = f"https://api.telegram.org/bot{bot_token}/sendVideo"
+
+    try:
+        # Створюємо file-like object з bytes
+        files = {
+            'video': (filename, BytesIO(video_content), 'video/mp4')
+        }
+        data = {
+            'chat_id': telegram_user_id,
+            'caption': caption or '',
+            'parse_mode': 'HTML'
+        }
+
+        response = requests.post(url, data=data, files=files)
+
+        if response.status_code == 200:
+            logger.info(f"✅ Відео {filename} надіслано користувачу {telegram_user_id}")
+
+            save_message(
+                user_id=telegram_user_id,
+                role="assistant",
+                message=f"[Відео: {filename}]{' - ' + caption if caption else ''}",
+                issue_key=issue_key
+            )
+            return True
+        else:
+            logger.error(f"❌ Помилка відправки відео: {response.status_code} - {response.text}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Помилка при відправці відео: {e}")
+        return False
+
+
 def send_jira_images_as_album(telegram_user_id: int, issue_key: str, media: list, files_dict: dict,  message_text: str = None):
     """
     Відправляє всі картинки одним альбомом (до 10 штук)
@@ -215,12 +255,14 @@ class SupportAiAgent:
                 TAKE_SUMMARY: [
                     MessageHandler(filters.TEXT, self.create_summary_jira_issue),
                     MessageHandler(filters.PHOTO, self.handle_photo),
-                    MessageHandler(filters.VOICE, self.handle_voice)
+                    MessageHandler(filters.VOICE, self.handle_voice),
+                    MessageHandler(filters.VIDEO, self.handle_video)
                 ],
                 START_CHAT: [
                     MessageHandler(filters.TEXT, self.send_message),
                     MessageHandler(filters.PHOTO, self.handle_photo),
                     MessageHandler(filters.VOICE, self.handle_voice),
+                    MessageHandler(filters.VIDEO, self.handle_video),
                     MessageHandler(filters.TEXT, self.confirm_phone),
                 ]
             },
@@ -238,6 +280,7 @@ class SupportAiAgent:
         )
         self.application.add_handler(MessageHandler(filters.PHOTO, self.handle_photo))
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice))
+        self.application.add_handler(MessageHandler(filters.VIDEO, self.handle_video))
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Початок авторизації"""
@@ -601,6 +644,141 @@ class SupportAiAgent:
 
         return START_CHAT
 
+    async def handle_video(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обробка відео від користувача"""
+        user_id = update.effective_user.id
+        user_db = get_user_by_telegram_id(user_id)
+
+        if not user_db:
+            await update.message.reply_text(
+                "❌ Спочатку авторізуйтесь через /start"
+            )
+            return ConversationHandler.END
+
+        # Отримуємо відео
+        video = update.message.video
+        video_caption = update.message.caption or ""
+
+        try:
+            # Завантажуємо файл
+            video_file = await context.bot.get_file(video.file_id)
+            video_bytes = await video_file.download_as_bytearray()
+            filename = f"video_{video.file_id}.mp4"
+
+            # Отримуємо активний issue користувача
+            active_issue_key = get_active_issue_for_user(user_id)
+
+            # ВИПАДОК 1: Немає активного issue - створюємо новий (стан TAKE_SUMMARY)
+            if not active_issue_key:
+                # Отримуємо дані користувача з ERP
+                response, status_response = get_user_data(user_db[4])
+                if status_response != 200:
+                    user_token = get_user_token(user_db[3])
+                    update_erp_user_token(user_db[1], user_token)
+                    response, status_response = get_user_data(user_db[4])
+
+                user_full_name = response.json()['fullName']
+                departament = response.json()['departmentJiraId']
+                balance_unit = response.json()['balanceUnitJiraId']
+                user_login = response.json()['login']
+                telegram_user_name = update.effective_user.username
+
+                # Створюємо summary з підпису або дефолтного тексту
+                summary_text = video_caption if video_caption else "Відео користувача"
+
+                # Створюємо новий issue
+                returned_issue_key = create_issue(
+                    summary_from_user=summary_text,
+                    description='',
+                    telegram_user_id=user_id,
+                    departament_id=departament,
+                    balance_unit_id=balance_unit,
+                    telegram_user_name=telegram_user_name,
+                    user_fio=user_full_name,
+                    user_login=user_login,
+                )
+
+                # Додаємо відео як attachment
+                attachment_result = add_attachment_to_issue(
+                    issue_key=returned_issue_key,
+                    file_content=bytes(video_bytes),
+                    filename=filename
+                )
+
+                # Зберігаємо повідомлення
+                if video_caption:
+                    save_message(user_id, "user", f"[Відео]: {video_caption}", issue_key=returned_issue_key)
+                    message_for_comment = video_caption
+                else:
+                    save_message(user_id, "user", "[Відео користувача]", issue_key=returned_issue_key)
+                    message_for_comment = "Відео користувача"
+
+                # Створюємо коментар з відео
+                add_comment_to_issue(
+                    sender='telegram_user',
+                    message=message_for_comment,
+                    issue_key=returned_issue_key,
+                    attachment_filename=attachment_result.get('filename') if attachment_result.get('success') else None
+                )
+
+                await update.message.reply_text(f"✅ Відео додано до звернення {returned_issue_key}")
+                return START_CHAT
+
+            # ВИПАДОК 2: Є активний issue - додаємо відео до нього (стан START_CHAT)
+            issue_jira_status = get_jira_issue_status(active_issue_key)
+
+            if issue_jira_status == 'Done':
+                keyboard = ReplyKeyboardMarkup([
+                    ["Почати діалог"],
+                ], resize_keyboard=True, one_time_keyboard=True)
+
+                await update.message.reply_text(
+                    f"У вас немає активних звернень"
+                    f"Щоб створити нове звернення, натисніть кнопку 'Почати діалог'",
+                    reply_markup=keyboard
+                )
+                return ConversationHandler.END
+
+            # Додаємо attachment до існуючого issue
+            attachment_result = add_attachment_to_issue(
+                issue_key=active_issue_key,
+                file_content=bytes(video_bytes),
+                filename=filename
+            )
+
+            if attachment_result.get('success'):
+                # Зберігаємо повідомлення
+                if video_caption:
+                    save_message(user_id, "user", f"[Відео]: {video_caption}", issue_key=active_issue_key)
+                    message_for_comment = video_caption
+                else:
+                    save_message(user_id, "user", "[Відео користувача]", issue_key=active_issue_key)
+                    message_for_comment = "Відео користувача"
+
+                # Створюємо коментар з відео
+                add_comment_to_issue(
+                    sender='telegram_user',
+                    message=message_for_comment,
+                    issue_key=active_issue_key,
+                    attachment_filename=attachment_result.get('filename')
+                )
+
+                await update.message.reply_text(f"✅ Відео додано до звернення {active_issue_key}")
+                return START_CHAT
+            else:
+                await update.message.reply_text(
+                    "❌ Помилка при завантаженні відео. Спробуйте ще раз"
+                )
+                return START_CHAT
+
+        except Exception as e:
+            logger.error(f"❌ Помилка при обробці відео: {e}")
+            await update.message.reply_text(
+                "❌ Помилка при обробці відео. Спробуйте ще раз"
+            )
+
+        return START_CHAT
+
     async def confirm_phone(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         button = KeyboardButton("📱 Поділитися номером", request_contact=True)
         keyboard = ReplyKeyboardMarkup([[button]], resize_keyboard=True, one_time_keyboard=True)
@@ -700,7 +878,13 @@ class SupportAiAgent:
         """Обробка повідомлень від користувача"""
         message_from_user = update.message.text
         user_id = update.effective_user.id
-        user_data = get_user_by_telegram_id(user_id)
+        # Перевіряємо чи користувач існує
+        user_db = get_user_by_telegram_id(user_id)
+        if not user_db:
+            await update.message.reply_text(
+                "❌ Спочатку авторизуйтесь через /start"
+            )
+            return ConversationHandler.END
 
         if message_from_user == 'Почати діалог' or message_from_user == '/start_chat':
             await update.message.reply_text(
@@ -723,14 +907,6 @@ class SupportAiAgent:
 
             await update.message.reply_text(f"Натисніть кнопку 'Почати діалог''",
                 reply_markup=keyboard)
-            return ConversationHandler.END
-
-        # Перевіряємо чи користувач існує
-        user_db = get_user_by_telegram_id(user_id)
-        if not user_db:
-            await update.message.reply_text(
-                "❌ Спочатку авторизуйтесь через /start"
-            )
             return ConversationHandler.END
 
         save_message(user_id, "user", message_from_user, issue_key=active_issue_key)

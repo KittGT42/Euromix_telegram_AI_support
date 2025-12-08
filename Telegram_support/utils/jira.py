@@ -248,23 +248,100 @@ def download_jira_attachment(issue_key, filename):
     return None
 
 
-def parse_jira_comment(body):
+def get_attachment_type(issue_key, filename):
     """
-    Розділяє Jira коментар на текст та інформацію про картинки
+    Визначає тип attachment (image або video) за mimetype
+
+    Шукає attachment за ім'ям файлу (підтримує часткове співпадіння, бо Jira може додавати UUID)
+    """
+    auth = HTTPBasicAuth("Dmitriy.Kostromskiy@euromix.in.ua", os.getenv("JIRA_API_TOKEN"))
+    url = f"https://euromix.atlassian.net/rest/api/2/issue/{issue_key}"
+
+    try:
+        response = requests.get(url, auth=auth)
+        issue_data = response.json()
+
+        attachments = issue_data.get('fields', {}).get('attachment', [])
+
+        # Спочатку шукаємо точний збіг
+        for attachment in attachments:
+            if attachment['filename'] == filename:
+                mimetype = attachment.get('mimeType', '')
+                if mimetype.startswith('video/'):
+                    return 'video'
+                elif mimetype.startswith('image/'):
+                    return 'image'
+
+        # Якщо точного збігу немає, шукаємо часткове співпадіння
+        # (корисно коли Jira додає UUID до імені файлу)
+        for attachment in attachments:
+            if filename in attachment['filename'] or attachment['filename'] in filename:
+                mimetype = attachment.get('mimeType', '')
+                if mimetype.startswith('video/'):
+                    return 'video'
+                elif mimetype.startswith('image/'):
+                    return 'image'
+
+    except Exception as e:
+        print(f"❌ Помилка при отриманні типу attachment: {e}")
+
+    return 'image'  # За замовчуванням вважаємо що це зображення
+
+
+def parse_jira_comment(body, issue_key=None):
+    """
+    Розділяє Jira коментар на текст та інформацію про медіа файли (картинки та відео)
+
+    Jira використовує різний синтаксис для різних типів attachments:
+    - Зображення: !filename|parameters!
+    - Відео та інші файли: [^filename]
     """
     # Regex для знаходження Jira image syntax: !filename|parameters!
     image_pattern = r'!([^|!]+)\|[^!]*!'
 
-    # Знаходимо всі картинки
-    images = re.findall(image_pattern, body)
+    # Regex для знаходження Jira attachment syntax: [^filename]
+    attachment_pattern = r'\[\^([^\]]+)\]'
 
-    # Видаляємо всі картинки з тексту
-    clean_text = re.sub(image_pattern, '', body).strip()
+    # Знаходимо всі зображення
+    image_files = re.findall(image_pattern, body)
+
+    # Знаходимо всі attachments (відео, документи тощо)
+    attachment_files = re.findall(attachment_pattern, body)
+
+    # Видаляємо всі медіа файли з тексту
+    clean_text = body
+    clean_text = re.sub(image_pattern, '', clean_text)
+    clean_text = re.sub(attachment_pattern, '', clean_text).strip()
+
+    # Розділяємо на фото та відео
+    images = []
+    videos = []
+
+    if issue_key:
+        # Обробляємо зображення
+        for filename in image_files:
+            images.append(filename)
+
+        # Обробляємо attachments (можуть бути відео або інші файли)
+        for filename in attachment_files:
+            file_type = get_attachment_type(issue_key, filename)
+            if file_type == 'video':
+                videos.append(filename)
+            else:
+                # Якщо це не відео, можливо це зображення без синтаксису !filename!
+                file_type_check = get_attachment_type(issue_key, filename)
+                if file_type_check == 'image':
+                    images.append(filename)
+    else:
+        # Якщо issue_key не передано, вважаємо все зображеннями
+        images = image_files + attachment_files
 
     return {
         'text': clean_text,
         'images': images,
-        'images_count': len(images)
+        'images_count': len(images),
+        'videos': videos,
+        'videos_count': len(videos)
     }
 
 

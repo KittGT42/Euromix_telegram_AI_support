@@ -7,7 +7,7 @@ from Telegram_support.utils.open_web_ui_agents_requests import summary_agent, de
 from Telegram_support.utils.jira import update_jira_issue, parse_jira_comment, download_jira_attachment
 from Telegram_support.utils.main import format_conversation_to_string
 
-from Telegram_support.main import send_telegram_message, send_telegram_photo, send_jira_images_as_album
+from Telegram_support.main import send_telegram_message, send_telegram_photo, send_telegram_video, send_jira_images_as_album
 
 from io import BytesIO
 import logging
@@ -42,12 +42,47 @@ def webhook_jira_comment():
         if account_id in skip_technical_account:
             return "OK"
 
-        result_parse_comment = parse_jira_comment(message_to_user)
+        result_parse_comment = parse_jira_comment(message_to_user, issue_key)
         message_to_user = result_parse_comment.get('text')
         image_count = result_parse_comment.get('images_count')
+        video_count = result_parse_comment.get('videos_count')
         telegram_user_id = get_telegram_user_id_by_issue(issue_key)
         images_names = result_parse_comment.get('images')
-        if image_count == 0:
+        videos_names = result_parse_comment.get('videos')
+
+        # Логування для діагностики
+        print(f"📊 Parsed comment: images={image_count}, videos={video_count}")
+        print(f"📷 Images: {images_names}")
+        print(f"🎥 Videos: {videos_names}")
+        # Обробка відео (якщо є тільки відео)
+        if video_count > 0 and image_count == 0:
+            try:
+                update_jira_issue_ai_work_status(issue_key, False)
+            except Exception as e:
+                print(f'Error updating jira issue ai work status: {e}')
+
+            # Відправляємо текстове повідомлення якщо є
+            if message_to_user and telegram_user_id:
+                send_telegram_message(
+                    telegram_user_id=telegram_user_id,
+                    message_text=message_to_user,
+                    issue_key=issue_key
+                )
+
+            # Відправляємо відео
+            for video_filename in videos_names:
+                attachment = download_jira_attachment(issue_key, video_filename)
+                if attachment:
+                    send_telegram_video(
+                        telegram_user_id=telegram_user_id,
+                        video_content=attachment['content'],
+                        filename=attachment['filename'],
+                        issue_key=issue_key
+                    )
+
+            return "OK"
+
+        if image_count == 0 and video_count == 0:
             try:
                 update_jira_issue_ai_work_status(issue_key, False)
             except Exception as e:
@@ -151,6 +186,32 @@ def webhook_jira_comment():
                     )
                 except Exception as e:
                     logger.error(f"Error sending photo: {e}")
+
+            return "OK"
+
+        # Обробка відео якщо вони є (окремо від фото)
+        if video_count > 0:
+            try:
+                update_jira_issue_ai_work_status(issue_key, False)
+            except Exception as e:
+                print(f'Error updating jira issue ai work status: {e}')
+
+            for video_filename in videos_names:
+                attachment = download_jira_attachment(issue_key, video_filename)
+
+                if not attachment:
+                    logger.warning(f"⚠️ Не знайдено відео attachment: {video_filename}")
+                    continue
+
+                try:
+                    send_telegram_video(
+                        telegram_user_id=telegram_user_id,
+                        video_content=attachment['content'],
+                        filename=attachment['filename'],
+                        issue_key=issue_key
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending video: {e}")
 
             return "OK"
 
