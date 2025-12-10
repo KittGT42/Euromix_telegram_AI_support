@@ -1,11 +1,12 @@
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     filters,
     ContextTypes,
-    ConversationHandler
+    ConversationHandler,
+    CallbackQueryHandler
 )
 
 from Telegram_support.database.crud import (
@@ -18,10 +19,11 @@ from Telegram_support.database.crud import (
     get_active_issue_for_user,
     update_erp_user_token,
     get_jira_issue_status,
-    get_jira_issue_ai_work_status
+    get_jira_issue_ai_work_status,
+    update_jira_issue_ai_work_status
 )
 
-from Telegram_support.utils.jira import create_issue, add_comment_to_issue, add_attachment_to_issue
+from Telegram_support.utils.jira_main import create_issue, add_comment_to_issue, add_attachment_to_issue, add_comment_with_mentions
 from Telegram_support.utils.open_web_ui_agents_requests import ask_to_open_web_ui_agent, chat_with_image
 from Telegram_support.utils.main import transcribe_voice
 
@@ -88,6 +90,22 @@ def send_telegram_message(telegram_user_id: int, message_text: str, issue_key: s
 
 START_CHAT, TAKE_SUMMARY, END_CHAT, PHONE  = range(4)
 part_of_url_data_base = settings.PART_OF_URL_DATABASE
+
+
+def create_call_specialist_keyboard(issue_key: str):
+    """
+    Створює inline клавіатуру з кнопкою 'Покликати спеціаліста'
+
+    Args:
+        issue_key: ключ Jira issue для передачі в callback
+
+    Returns:
+        InlineKeyboardMarkup: об'єкт клавіатури
+    """
+    keyboard = [
+        [InlineKeyboardButton("👨‍💼 Покликати спеціаліста", callback_data=f"call_specialist:{issue_key}")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 
 def send_telegram_photo(telegram_user_id: int, photo_content: bytes, filename: str, caption: str = None,
@@ -282,6 +300,11 @@ class SupportAiAgent:
         self.application.add_handler(MessageHandler(filters.VOICE, self.handle_voice))
         self.application.add_handler(MessageHandler(filters.VIDEO, self.handle_video))
 
+        # Обробник для кнопки "Покликати спеціаліста"
+        self.application.add_handler(
+            CallbackQueryHandler(self.handle_call_specialist, pattern="^call_specialist:")
+        )
+
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Початок авторизації"""
         user_id = update.effective_user.id
@@ -390,7 +413,8 @@ class SupportAiAgent:
                         save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
                         add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
 
-                        await update.message.reply_text(ai_answer)
+                        keyboard = create_call_specialist_keyboard(returned_issue_key)
+                        await update.message.reply_text(ai_answer, reply_markup=keyboard)
                         return START_CHAT
 
                     return START_CHAT
@@ -409,7 +433,8 @@ class SupportAiAgent:
                             save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
                             add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
 
-                            await update.message.reply_text(ai_answer)
+                            keyboard = create_call_specialist_keyboard(returned_issue_key)
+                            await update.message.reply_text(ai_answer, reply_markup=keyboard)
                             return START_CHAT
 
                     return START_CHAT
@@ -460,7 +485,8 @@ class SupportAiAgent:
                         save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
                         add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
 
-                        await update.message.reply_text(ai_answer)
+                        keyboard = create_call_specialist_keyboard(active_issue_key)
+                        await update.message.reply_text(ai_answer, reply_markup=keyboard)
                         return START_CHAT
 
                     return START_CHAT
@@ -479,7 +505,8 @@ class SupportAiAgent:
                             save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
                             add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
 
-                            await update.message.reply_text(ai_answer)
+                            keyboard = create_call_specialist_keyboard(active_issue_key)
+                            await update.message.reply_text(ai_answer, reply_markup=keyboard)
                             return START_CHAT
 
                     return START_CHAT
@@ -582,7 +609,8 @@ class SupportAiAgent:
                     save_message(user_id, "assistant", ai_answer, issue_key=returned_issue_key)
                     add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=returned_issue_key)
 
-                    await update.message.reply_text(ai_answer)
+                    keyboard = create_call_specialist_keyboard(returned_issue_key)
+                    await update.message.reply_text(ai_answer, reply_markup=keyboard)
                 else:
                     await update.message.reply_text(f"📝 Розпізнано: {transcribed_text}")
 
@@ -630,7 +658,8 @@ class SupportAiAgent:
                 save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
                 add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
 
-                await update.message.reply_text(ai_answer)
+                keyboard = create_call_specialist_keyboard(active_issue_key)
+                await update.message.reply_text(ai_answer, reply_markup=keyboard)
             else:
                 await update.message.reply_text(transcribed_text)
 
@@ -870,8 +899,9 @@ class SupportAiAgent:
         save_message(telegram_user_id_from_chat, "assistant", ai_answer, issue_key=returned_issue_key)
         add_comment_to_issue(sender='ai_response' ,message=ai_answer, issue_key=returned_issue_key)
 
-        # 5️⃣ Відправляємо відповідь користувачу
-        await update.message.reply_text(ai_answer)
+        # 5️⃣ Відправляємо відповідь користувачу з кнопкою "Покликати спеціаліста"
+        keyboard = create_call_specialist_keyboard(returned_issue_key)
+        await update.message.reply_text(ai_answer, reply_markup=keyboard)
         return START_CHAT
 
     async def send_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -922,8 +952,9 @@ class SupportAiAgent:
             save_message(user_id, "assistant", ai_answer, issue_key=active_issue_key)
             add_comment_to_issue(sender='ai_response', message=ai_answer, issue_key=active_issue_key)
 
-            # 5️⃣ Відправляємо відповідь користувачу
-            await update.message.reply_text(ai_answer)
+            # 5️⃣ Відправляємо відповідь користувачу з кнопкою "Покликати спеціаліста"
+            keyboard = create_call_specialist_keyboard(active_issue_key)
+            await update.message.reply_text(ai_answer, reply_markup=keyboard)
 
         return START_CHAT
 
@@ -949,6 +980,66 @@ class SupportAiAgent:
             "Використайте /help для списку команд"
         )
         return ConversationHandler.END
+
+    async def handle_call_specialist(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Обробляє натискання кнопки 'Покликати спеціаліста'
+
+        1. Вимикає AI агента (ai_work_status = False)
+        2. Додає коментар в Jira з тегами Дмитра та Максима
+        3. Повідомляє користувача
+        """
+        query = update.callback_query
+        await query.answer()
+
+        # Отримуємо issue_key з callback_data
+        callback_data = query.data
+        if not callback_data.startswith("call_specialist:"):
+            await query.message.reply_text("❌ Помилка обробки запиту")
+            return
+
+        issue_key = callback_data.split(":", 1)[1]
+
+        try:
+            # 1️⃣ Вимикаємо AI агента
+            ai_disabled = update_jira_issue_ai_work_status(
+                jira_issue_key=issue_key,
+                jira_new_ai_work_status=False
+            )
+
+            if not ai_disabled:
+                await query.message.reply_text(
+                    f"❌ Помилка при вимкненні AI для issue {issue_key}"
+                )
+                return
+
+            # 2️⃣ Додаємо коментар в Jira з тегами (mentions)
+            # ВАЖЛИВО: Замініть ці Account ID на справжні ID Дмитра та Максима
+            dmitry_account_id = "5eb2724db882f90bae558d45"  # ID Дмитра
+            maxim_account_id = "712020:9dfb0041-fcf7-4077-a9a6-1ce5f3878e48" # ID Максима Чомкала
+
+            # Додаємо коментар через спеціальний користувач (можна використати ai або telegram user)
+            comment_result = add_comment_with_mentions(
+            sender='ai_response',
+            message="🔔 Користувач попросив допомогу спеціаліста.\n\nAI агент вимкнено для цього звернення.",
+            issue_key=issue_key,
+            mention_account_ids=[dmitry_account_id, maxim_account_id]
+        )
+            if comment_result:
+                await query.message.reply_text(
+                    "✅ Спеціаліста покликано!\n\n"
+                    "AI агент вимкнено. Дмитро та Максим отримали сповіщення.\n"
+                    "Очікуйте на відповідь від спеціаліста."
+                )
+                logger.info(f"✅ Specialist called for issue {issue_key}, AI disabled")
+            else:
+                await query.message.reply_text("⚠️ AI вимкнено, але виникла проблема з відправкою сповіщення.")
+
+        except Exception as e:
+            logger.error(f"❌ Error handling call specialist: {e}")
+            await query.message.reply_text(
+                "❌ Помилка при виклику спеціаліста. Спробуйте ще раз."
+            )
 
     def run(self):
         """Запуск бота"""

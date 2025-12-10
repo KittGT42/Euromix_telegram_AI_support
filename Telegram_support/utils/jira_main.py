@@ -9,7 +9,23 @@ import json
 from Telegram_support.database.crud import save_jira_issue
 import re
 
+import logging
+
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
+
+HEADERS_MAIN = {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    }
+
+AUTH_MAIN_KOSTROMSKIY = HTTPBasicAuth("Dmitriy.Kostromskiy@euromix.in.ua", os.getenv("JIRA_API_TOKEN"))
+AUTH_MAIN_TG_BOT = HTTPBasicAuth("tgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_USER"))
+AUTH_MAIN_AI_TG_BOT = HTTPBasicAuth("aitgbot@euromix.in.ua", os.getenv("JIRA_API_TOKEN_TELEGRAM_AI"))
+
+JIRA_EUROMIX_MAIN_URL = "https://euromix.atlassian.net"
 
 def create_issue(summary_from_user: str, description: str, telegram_user_id, departament_id: str, balance_unit_id: str,
                  telegram_user_name: str, user_fio: str, user_login: str,
@@ -391,6 +407,96 @@ def add_attachment_to_issue(issue_key: str, file_content: bytes, filename: str):
         print(f"❌ Помилка при завантаженні attachment: {e}")
         return {'success': False}
 
+
+def add_comment_with_mentions(sender: str, message: str, issue_key: str, mention_account_ids: list):
+    """
+    Додає коментар до Jira issue з mentions користувачів.
+
+    Args:
+        sender: 'ai_response' або 'telegram_user'
+        message: текст коментаря
+        issue_key: ключ issue (напр. "AITG-123")
+        mention_account_ids: список account ID для @mention
+
+    Returns:
+        dict: відповідь від Jira API або None при помилці
+    """
+    url = f"{JIRA_EUROMIX_MAIN_URL}/rest/api/3/issue/{issue_key}/comment"
+
+    # Створюємо ADF структуру
+    adf_content = []
+
+    # Параграф з mentions
+    mention_paragraph = {
+        "type": "paragraph",
+        "content": []
+    }
+
+    for i, account_id in enumerate(mention_account_ids):
+        mention_paragraph["content"].append({
+            "type": "mention",
+            "attrs": {
+                "id": account_id
+            }
+        })
+        # Пробіл після кожного mention (крім останнього)
+        if i < len(mention_account_ids) - 1:
+            mention_paragraph["content"].append({
+                "type": "text",
+                "text": " "
+            })
+
+    adf_content.append(mention_paragraph)
+
+    # Додаємо текст повідомлення (кожен рядок = окремий параграф)
+    for line in message.split('\n'):
+        if line.strip():
+            adf_content.append({
+                "type": "paragraph",
+                "content": [{
+                    "type": "text",
+                    "text": line
+                }]
+            })
+
+    # Тіло запиту з ADF
+    payload = {
+        "body": {
+            "version": 1,
+            "type": "doc",
+            "content": adf_content
+        }
+    }
+
+    # Додаємо властивості залежно від sender
+    if sender == 'ai_response':
+        payload["properties"] = [
+            {
+                "key": "sd.public.comment",
+                "value": {"internal": False}
+            }
+        ]
+    elif sender == 'telegram_user':
+        payload["properties"] = [
+            {
+                "key": "sd.public.comment",
+                "value": {"internal": True}
+            }
+        ]
+
+    response = requests.post(
+        url,
+        json=payload,
+        headers=HEADERS_MAIN,
+        auth=AUTH_MAIN_AI_TG_BOT
+    )
+
+    if response.status_code == 201:
+        logger.info(f"✅ Коментар з mentions додано до {issue_key} (від {sender})")
+        return response.json()
+    else:
+        logger.error(f"❌ Помилка додавання коментаря з mentions: {response.status_code} - {response.text}")
+        return None
 
 def main():
     # add_comment_to_issue()

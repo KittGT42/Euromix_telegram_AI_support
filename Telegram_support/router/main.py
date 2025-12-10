@@ -4,7 +4,7 @@ from Telegram_support.database.crud import (update_jira_issue_status, get_telegr
                                             update_jira_issue_ai_work_status, get_chat_history_by_issue,
                                             get_jira_issue_status)
 from Telegram_support.utils.open_web_ui_agents_requests import summary_agent, description_agent
-from Telegram_support.utils.jira import update_jira_issue, parse_jira_comment, download_jira_attachment
+from Telegram_support.utils.jira_main import update_jira_issue, parse_jira_comment, download_jira_attachment
 from Telegram_support.utils.main import format_conversation_to_string
 
 from Telegram_support.main import send_telegram_message, send_telegram_photo, send_telegram_video, send_jira_images_as_album
