@@ -37,5 +37,3 @@ def get_session():
     """Генератор сесії для роботи з БД"""
     with Session(engine) as session:
         yield session
-
-create_all_tables()
